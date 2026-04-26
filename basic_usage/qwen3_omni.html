@@ -525,6 +525,9 @@ uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </s
 <section id="video-and-audio-input">
 <h3>Video and Audio Input<a class="headerlink" href="#video-and-audio-input" title="Link to this heading">#</a></h3>
 <p>Send a video with a spoken audio question. The model watches the video, hears the question, and responds with text.</p>
+<p>The Video-AMME CI benchmark uses this same modality combination: video input
+plus a spoken question/options WAV, with only routing and answer-format
+instructions in the text message.</p>
 <p><strong>cURL</strong></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8008/v1/chat/completions<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
