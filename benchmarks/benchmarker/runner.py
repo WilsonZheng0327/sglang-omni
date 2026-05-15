@@ -28,10 +28,10 @@ class RunConfig:
     disable_tqdm: bool = False
     timeout_s: int = 300
     # read_bufsize controls aiohttp ClientSession's read buffer size in bytes.
-    # When None, aiohttp's default (~64 KiB) is used. Streaming benchmarks set
-    # this to a small value (e.g. 1024) so per-chunk SSE frames arrive at the
-    # parser without being coalesced behind a large prefetch window. The
-    # underlying TCP read still pulls MTU-sized chunks; this knob signals
+    # When None, aiohttp's default (~64 KiB) is used. Streaming MMMU sweeps
+    # set this to ``1`` per AC-3's literal contract so per-chunk SSE frames
+    # arrive at the parser without being coalesced behind a prefetch window.
+    # The underlying TCP read still pulls MTU-sized chunks; this knob signals
     # intent and tightens the application-visible buffer high-watermark.
     read_bufsize: int | None = None
 

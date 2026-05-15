@@ -103,7 +103,7 @@ VC_STREAM_WER_MAX_PER_SAMPLE = 0.17
 _VC_NON_STREAM_P95 = {
     8: {
         "throughput_qps": 0.850,
-        "tok_per_s_agg": 70.5,
+        "tok_per_s_engine_agg": 70.5,
         "latency_mean_s": 8.567,
         "rtf_mean": 2.5022,
     }
@@ -112,7 +112,7 @@ _VC_NON_STREAM_P95 = {
 _VC_STREAM_P95 = {
     8: {
         "throughput_qps": 0.715,
-        "tok_per_s_agg": 70.0,
+        "tok_per_s_engine_agg": 70.0,
         "latency_mean_s": 9.403,
         "rtf_mean": 2.5614,
     }

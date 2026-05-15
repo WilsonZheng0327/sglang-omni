@@ -31,7 +31,7 @@ VIDEOAMME_MIN_ACCURACY = 0.6667
 _VIDEOAMME_P95 = {
     16: {
         "throughput_qps": 0.237,
-        "tok_per_s_agg": 0.9,
+        "tok_per_s_clientwall_agg": 0.9,
         "latency_mean_s": 51.414,
     },
 }

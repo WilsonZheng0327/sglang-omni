@@ -42,6 +42,10 @@ def _parser_namespace(**overrides) -> argparse.Namespace:
         reps=3,
         repetition_index=0,
         dataset_revisions=None,
+        preflight_json=None,
+        launcher_log=None,
+        mem_fraction_static=None,
+        prefix_cache_disabled=True,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -148,3 +152,102 @@ def test_run_metadata_routes_container_by_backend() -> None:
     sglang_meta = _build_run_metadata(MMMUEvalConfig(model="m", backend="sglang"))
     assert sglang_meta["container_name"] == "sglang-hayden-benchmark"
     assert sglang_meta["container_image"] == "lmsysorg/sglang"
+
+
+def test_run_metadata_merges_model_revision_from_preflight_json(tmp_path) -> None:
+    """AC-9 value-source: model_revision comes from preflight.json when provided."""
+    import json
+
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    preflight = {
+        "ok": True,
+        "model_revisions": {
+            "Qwen/Qwen3-Omni-30B-A3B-Instruct": "abc123def456",
+        },
+        "containers": {
+            "sglang-omni-hayden-benchmark": {
+                "container_image_digest": "sha256:deadbeef",
+            },
+        },
+    }
+    p = tmp_path / "preflight.json"
+    p.write_text(json.dumps(preflight))
+
+    cfg = MMMUEvalConfig(model="qwen3-omni", backend="omni", preflight_json=str(p))
+    meta = _build_run_metadata(cfg)
+    assert meta["model_revision"] == "abc123def456"
+    assert meta["container_image_digest"] == "sha256:deadbeef"
+
+
+def test_run_metadata_loads_dataset_revisions() -> None:
+    """AC-9 value-source: dataset_revisions comes from the JSON pin file."""
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    cfg = MMMUEvalConfig(model="qwen3-omni", backend="omni")
+    meta = _build_run_metadata(cfg)
+    # The checked-in mmmu_revisions.json has MMMU/MMMU populated; the
+    # metadata must reflect it, not an empty dict.
+    assert "MMMU/MMMU" in meta["dataset_revisions"]
+    assert len(meta["dataset_revisions"]["MMMU/MMMU"]) == 40  # SHA-1 length
+
+
+def test_run_metadata_scrapes_kv_capacity_from_launcher_log(tmp_path) -> None:
+    """AC-9 value-source: kv_cache_capacity_tokens comes from launcher log."""
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    log = tmp_path / "launcher.log"
+    log.write_text(
+        "[INFO] startup ...\n"
+        "[INFO] KV-cache pool: capacity 123456 tokens (bf16)\n"
+        "[INFO] ready\n"
+    )
+    cfg = MMMUEvalConfig(model="x", backend="omni", launcher_log=str(log))
+    meta = _build_run_metadata(cfg)
+    assert meta["kv_cache_capacity_tokens"] == 123456
+
+
+def test_run_metadata_records_mem_fraction_and_prefix_cache_policy() -> None:
+    """AC-9 value-source: mem_fraction + prefix_cache come from launch flags."""
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    cfg = MMMUEvalConfig(
+        model="x",
+        backend="omni",
+        mem_fraction_static=0.87,
+        prefix_cache_disabled=True,
+    )
+    meta = _build_run_metadata(cfg)
+    assert meta["mem_fraction_static_configured"] == 0.87
+    assert meta["prefix_cache_disabled"] is True
+
+
+def test_run_metadata_failure_count_from_request_results() -> None:
+    """AC-9 value-source: failure_count comes from request_results, not 0."""
+    from benchmarks.benchmarker.data import RequestResult
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    cfg = MMMUEvalConfig(model="x", backend="omni")
+    results = [
+        RequestResult(request_id="1", is_success=True),
+        RequestResult(request_id="2", is_success=False, error="boom"),
+        RequestResult(request_id="3", is_success=False, error="oom"),
+        RequestResult(request_id="4", is_success=True),
+    ]
+    meta = _build_run_metadata(cfg, request_results=results)
+    assert meta["failure_count"] == 2

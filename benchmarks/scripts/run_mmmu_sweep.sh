@@ -94,9 +94,15 @@ STATUS_LOG="$OUT_ROOT/sweep-status.jsonl"
 
 if [[ "$SKIP_PREFLIGHT" -eq 0 ]]; then
     echo "[sweep] running preflight gate..."
+    # AC-7: --strict-log-check makes any missing/non-matching launcher log
+    # fatal in sweep mode, and --launcher-log-{omni,sglang} point the gate
+    # at the tee'd logs produced by the operator's docker run --launch step.
     python benchmarks/scripts/preflight_mmmu_sweep.py \
         --host-lane-a "$HOST_LANE_A" \
         --host-lane-b "$HOST_LANE_B" \
+        --launcher-log-omni /tmp/sglang-omni-benchmark.log \
+        --launcher-log-sglang /tmp/sglang-benchmark.log \
+        --strict-log-check \
         --output "$OUT_ROOT/preflight.json" \
         || { echo "[sweep] preflight failed; aborting" >&2; exit 2; }
 else
@@ -109,6 +115,11 @@ fi
 # Runs one benchmark cell against a remote (or local) host. Writes the
 # result JSON under $OUT_ROOT/<lane>/<backend>/rep-<i>/mmmu_results.json
 # and appends an entry to $STATUS_LOG.
+#
+# Remote-host mode (host != localhost / $(hostname)) runs the eval over
+# SSH and writes results into a remote tmp dir; the dir is then scp'd
+# back into the local cell_dir so $OUT_ROOT always has the artifacts
+# the issue #379 follow-up comment needs.
 run_cell() {
     local host="$1" backend="$2" lane="$3" port="$4" rep_idx="$5" model="$6"
     local cell_dir="$OUT_ROOT/lane_$lane/$backend/rep_$rep_idx"
@@ -127,7 +138,6 @@ run_cell() {
         --repetition-index "$rep_idx"
         --max-concurrency "$CONCURRENCY"
         --warmup 5
-        --output-dir "$cell_dir"
     )
     if [[ -n "$SAMPLES" ]]; then
         cmd+=(--max-samples "$SAMPLES")
@@ -135,18 +145,45 @@ run_cell() {
 
     echo "[sweep] cell host=$host backend=$backend lane=$lane rep=$rep_idx"
     local status=success
+    local container_name container_image container_digest
+    if [[ "$backend" == "omni" ]]; then
+        container_name="sglang-omni-hayden-benchmark"
+        container_image="frankleeeee/sglang-omni:dev"
+    else
+        container_name="sglang-hayden-benchmark"
+        container_image="lmsysorg/sglang"
+    fi
+    container_digest="$(docker inspect "$container_name" --format '{{index .Image}}' 2>/dev/null || true)"
+
     if [[ "$host" == "$(hostname)" ]] || [[ -z "$host" ]]; then
+        cmd+=(--output-dir "$cell_dir")
         if ! "${cmd[@]}" 2> "$stderr_log"; then
             status=failed
         fi
     else
+        local remote_dir="/tmp/mmmu-sweep-${lane}-${backend}-${rep_idx}-$$"
+        cmd+=(--output-dir "$remote_dir")
+        # Ensure remote dir exists and is clean before the run.
+        ssh "$host" "mkdir -p $remote_dir && rm -rf $remote_dir/*" 2>/dev/null || true
         if ! ssh "$host" "cd /sgl-workspace/sglang-omni && ${cmd[*]}" 2> "$stderr_log"; then
             status=failed
         fi
+        # Always attempt to copy back partial artifacts so debugging is possible
+        # even on failure. scp non-zero is non-fatal (we still record status).
+        scp -q -r "${host}:${remote_dir}/." "${cell_dir}/" 2>>"$stderr_log" || true
+        ssh "$host" "rm -rf $remote_dir" 2>/dev/null || true
     fi
 
-    printf '{"host":"%s","backend":"%s","lane":"%s","rep":%d,"status":"%s","cell_dir":"%s"}\n' \
+    local failure_count
+    if [[ -f "${cell_dir}/mmmu_results.json" ]]; then
+        failure_count="$(python -c "import json,sys; d=json.load(open('${cell_dir}/mmmu_results.json')); print(d.get('run_metadata',{}).get('failure_count',0))" 2>/dev/null || echo 0)"
+    else
+        failure_count=0
+    fi
+
+    printf '{"host":"%s","backend":"%s","lane":"%s","rep":%d,"status":"%s","cell_dir":"%s","container_name":"%s","container_image":"%s","container_image_digest":"%s","server_port":%d,"failure_count":%s}\n' \
         "$host" "$backend" "$lane" "$rep_idx" "$status" "$cell_dir" \
+        "$container_name" "$container_image" "$container_digest" "$port" "$failure_count" \
         >> "$STATUS_LOG"
 
     if [[ "$status" == "failed" ]]; then

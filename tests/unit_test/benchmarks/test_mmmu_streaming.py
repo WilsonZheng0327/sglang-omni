@@ -584,6 +584,71 @@ def test_request_result_offsets_list_is_per_instance() -> None:
     assert b.content_chunk_offsets_ms == []
 
 
+def test_client_wall_results_do_not_emit_tok_per_s_agg() -> None:
+    """AC-5 negative: a client-wall RequestResult no longer emits the
+    ambiguous ``tok_per_s_agg`` key. After Round 2 migration, only the
+    truthful ``tok_per_s_clientwall_agg`` aggregate is reported for the
+    client-wall path. Legacy `tok_per_s_agg` is retained only for
+    results that genuinely lack a timing_source."""
+    from benchmarks.metrics.performance import compute_speed_metrics
+
+    r = RequestResult(
+        request_id="cw1",
+        is_success=True,
+        latency_s=0.5,
+        client_wall_time_s=0.5,
+        timing_source="client_wall_time_s",
+        completion_tokens=100,
+        tok_per_s=200.0,
+    )
+    summary = compute_speed_metrics([r])
+    assert "tok_per_s_clientwall_agg" in summary
+    assert "tok_per_s_agg" not in summary, (
+        "Migrated client-wall path must no longer emit the deprecated "
+        "tok_per_s_agg alias; consumers must read tok_per_s_clientwall_agg"
+    )
+
+
+def test_engine_results_emit_only_engine_agg() -> None:
+    """AC-5 symmetric: engine-timed (TTS) results emit only the engine
+    aggregate, not the ambiguous legacy key."""
+    from benchmarks.metrics.performance import compute_speed_metrics
+
+    r = RequestResult(
+        request_id="e1",
+        is_success=True,
+        latency_s=1.0,
+        engine_time_s=0.8,
+        timing_source="engine_time_s",
+        completion_tokens=120,
+        tok_per_s=150.0,
+    )
+    summary = compute_speed_metrics([r])
+    assert "tok_per_s_engine_agg" in summary
+    assert "tok_per_s_agg" not in summary
+    assert "tok_per_s_clientwall_agg" not in summary
+
+
+def test_legacy_results_still_emit_tok_per_s_agg() -> None:
+    """Legacy results (no timing_source set) keep emitting the legacy
+    aggregate key so unmigrated callers stay unbroken."""
+    from benchmarks.metrics.performance import compute_speed_metrics
+
+    r = RequestResult(
+        request_id="l1",
+        is_success=True,
+        latency_s=1.0,
+        engine_time_s=1.0,  # legacy path filled the old field
+        timing_source="",  # no timing_source set
+        completion_tokens=50,
+        tok_per_s=50.0,
+    )
+    summary = compute_speed_metrics([r])
+    assert "tok_per_s_agg" in summary
+    assert "tok_per_s_clientwall_agg" not in summary
+    assert "tok_per_s_engine_agg" not in summary
+
+
 def test_request_result_to_dict_preserves_empty_streaming_fields() -> None:
     """AC-4 negative: non-streaming runs keep [] and 0, not null/null."""
     from benchmarks.metrics.performance import _request_result_to_dict

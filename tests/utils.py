@@ -176,6 +176,27 @@ def assert_per_request_fields(
             ), f"Request {rid}: completion_tokens={req['completion_tokens']}, expected > 0"
 
 
+_TOK_PER_S_AGG_KEYS = (
+    "tok_per_s_engine_agg",
+    "tok_per_s_clientwall_agg",
+    "tok_per_s_agg",  # legacy fallback for results with no timing_source
+)
+
+
+def _resolve_tok_per_s_agg_key(summary: dict) -> str | None:
+    """Return whichever tok_per_s_*_agg key is present, in priority order.
+
+    Round 1 split the ambiguous `tok_per_s_agg` into truthful per-source
+    keys (engine vs client-wall). The CI tests carry their threshold as
+    one of those keys directly; this helper just picks the matching one
+    so callers don't have to special-case TTS vs MMMU paths.
+    """
+    for k in _TOK_PER_S_AGG_KEYS:
+        if k in summary:
+            return k
+    return None
+
+
 def apply_slack(
     p95: dict[int, dict[str, float]],
     slack_higher: float = 0.875,
@@ -185,12 +206,23 @@ def apply_slack(
 
     Higher-is-better metrics (throughput, tok/s): threshold = P95 x slack_higher
     Lower-is-better metrics (latency, rtf):      threshold = P95 x slack_lower
+
+    Accepts any of the new ``tok_per_s_engine_agg`` / ``tok_per_s_clientwall_agg``
+    keys (and falls back to legacy ``tok_per_s_agg``). The returned threshold
+    dict uses the matching ``*_min`` key so `assert_speed_thresholds` can pair
+    them up.
     """
     result: dict[int, dict[str, float]] = {}
     for conc, m in p95.items():
+        agg_key = _resolve_tok_per_s_agg_key(m)
+        if agg_key is None:
+            raise KeyError(
+                f"P95 reference at concurrency {conc} has no tok_per_s_*_agg key; "
+                f"expected one of {_TOK_PER_S_AGG_KEYS}"
+            )
         thresholds = {
             "throughput_qps_min": round(m["throughput_qps"] * slack_higher, 2),
-            "tok_per_s_agg_min": round(m["tok_per_s_agg"] * slack_higher, 1),
+            f"{agg_key}_min": round(m[agg_key] * slack_higher, 1),
             "latency_mean_s_max": round(m["latency_mean_s"] * slack_lower, 1),
         }
         if "rtf_mean" in m:
@@ -217,10 +249,13 @@ def assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) -
         f"throughput_qps {summary['throughput_qps']} < "
         f"{level_thresholds['throughput_qps_min']} at concurrency {concurrency}"
     )
-    assert summary["tok_per_s_agg"] >= level_thresholds["tok_per_s_agg_min"], (
-        f"tok_per_s_agg {summary['tok_per_s_agg']} < "
-        f"{level_thresholds['tok_per_s_agg_min']} at concurrency {concurrency}"
-    )
+    agg_key = _resolve_tok_per_s_agg_key(summary)
+    threshold_key = f"{agg_key}_min" if agg_key else None
+    if agg_key and threshold_key in level_thresholds:
+        assert summary[agg_key] >= level_thresholds[threshold_key], (
+            f"{agg_key} {summary[agg_key]} < "
+            f"{level_thresholds[threshold_key]} at concurrency {concurrency}"
+        )
     assert summary["latency_mean_s"] <= level_thresholds["latency_mean_s_max"], (
         f"latency_mean_s {summary['latency_mean_s']} > "
         f"{level_thresholds['latency_mean_s_max']} at concurrency {concurrency}"

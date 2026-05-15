@@ -47,7 +47,7 @@ VIDEOAMME_TALKER_N_ABOVE_50_MAX = 1
 _VIDEOAMME_TALKER_AUDIO_P95 = {
     8: {
         "throughput_qps": 0.231,
-        "tok_per_s_agg": 1.5,
+        "tok_per_s_clientwall_agg": 1.5,
         "latency_mean_s": 30.169,
         "rtf_mean": 4.9824,
     },

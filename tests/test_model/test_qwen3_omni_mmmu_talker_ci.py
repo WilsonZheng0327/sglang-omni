@@ -76,7 +76,7 @@ MMMU_AUDIO_N_ABOVE_50_MAX = 2
 _MMMU_AUDIO_P95 = {
     8: {
         "throughput_qps": 0.389,
-        "tok_per_s_agg": 9.9,
+        "tok_per_s_clientwall_agg": 9.9,
         "latency_mean_s": 13.641,
         "rtf_mean": 0.3777,
     },

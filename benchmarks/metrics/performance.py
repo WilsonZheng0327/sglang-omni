@@ -73,23 +73,16 @@ def _compute_token_metrics(successes: list[RequestResult]) -> dict:
             token_metrics["tok_per_s_clientwall_agg"] = round(
                 clientwall_tokens / clientwall_time, 1
             )
-    # Legacy fallback for results that never set timing_source.
+    # Legacy fallback for results that never set timing_source. New
+    # migrated paths (TTS / MMMU / audio / video) all carry a
+    # timing_source, so ``tok_per_s_agg`` only appears when the data
+    # genuinely lacks the schema migration. Consumers should read the
+    # explicit per-source aggregate keys.
     if legacy_timed and not engine_timed and not clientwall_timed:
         legacy_tokens = sum(o.completion_tokens for o in legacy_timed)
         legacy_time = sum(o.engine_time_s for o in legacy_timed)
         if legacy_time > 0 and legacy_tokens > 0:
             token_metrics["tok_per_s_agg"] = round(legacy_tokens / legacy_time, 1)
-    # Backward-compat alias: emit ``tok_per_s_agg`` mirroring whichever
-    # specific bucket populated, so unmigrated CI thresholds + helpers
-    # under ``tests/utils.py`` keep working until they migrate. New code
-    # should read the explicit ``tok_per_s_engine_agg`` /
-    # ``tok_per_s_clientwall_agg`` keys.
-    if "tok_per_s_agg" not in token_metrics:
-        alias = token_metrics.get("tok_per_s_clientwall_agg") or token_metrics.get(
-            "tok_per_s_engine_agg"
-        )
-        if alias is not None:
-            token_metrics["tok_per_s_agg"] = alias
 
     if gen_token_counts:
         token_metrics["gen_tokens_mean"] = round(float(np.mean(gen_token_counts)), 0)

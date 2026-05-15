@@ -43,6 +43,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -291,6 +292,97 @@ def verify_launcher_log_references_snapshot(
     return expected_snapshot in text
 
 
+def _shell_prefix(host: str | None) -> list[str]:
+    """Empty list for local execution, ``[ssh, host]`` for remote."""
+    if host and host not in ("", "localhost", "127.0.0.1"):
+        return ["ssh", host]
+    return []
+
+
+def launch_named_container(
+    name: str,
+    image: str,
+    snapshot_path: str,
+    server_cmd: list[str],
+    log_path: str,
+    host: str | None = None,
+) -> bool:
+    """Launch one benchmark container and tee its launcher log to disk.
+
+    Implements AC-7 step (c): the gate actually starts the contracted
+    container and captures its launcher output so AC-7 step (d) can grep
+    for the resolved snapshot path. The capture uses
+    ``docker logs -f <name> > <log_path> 2>&1`` because the container
+    itself runs detached (``-d``), so the only way to retain its stdout
+    is to attach a follower. The follower runs in the background; the
+    sweep proceeds once ``/v1/models`` reports healthy.
+
+    Returns True on a successful ``docker run`` invocation; the caller
+    is responsible for the readiness probe + log verification steps.
+    """
+    prefix = _shell_prefix(host)
+
+    # Idempotent stop+remove so re-running the preflight on the same host
+    # never errors out on "container name already in use".
+    subprocess.run(
+        prefix + ["docker", "rm", "-f", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+    run_cmd = prefix + [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        name,
+        "--gpus",
+        "all",
+        "--network",
+        "host",
+        "-v",
+        f"{snapshot_path}:/snapshot:ro",
+        image,
+        *server_cmd,
+    ]
+    try:
+        subprocess.check_call(run_cmd, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError:
+        return False
+
+    # Attach a log follower. Remote hosts need the redirection to happen on
+    # the remote side, so wrap in a shell invocation when over SSH.
+    if prefix:
+        remote_shell_cmd = (
+            f"docker logs -f {name} > {log_path} 2>&1"
+        )
+        subprocess.Popen(["ssh", host, remote_shell_cmd])
+    else:
+        log_file = open(log_path, "wb")
+        subprocess.Popen(
+            ["docker", "logs", "-f", name],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    return True
+
+
+def wait_for_v1_models(base_url: str, timeout_s: int = 600) -> bool:
+    """Poll /v1/models until 200 or timeout."""
+    url = base_url.rstrip("/") + "/v1/models"
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with request.urlopen(url, timeout=5) as resp:
+                if resp.status == 200:
+                    return True
+        except (error.URLError, error.HTTPError):
+            pass
+        time.sleep(5)
+    return False
+
+
 def print_launch_commands(
     snapshot_omni: str | None,
     snapshot_sglang: str | None,
@@ -380,7 +472,41 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Emit the docker run commands the operator should execute on "
         "the H200 host to start the two named containers with snapshot "
-        "pinning, then exit. Useful as a sanity step before the live launch.",
+        "pinning, then exit. Kept as a manual-audit fallback for the "
+        "operator who wants to inspect commands before --launch runs them.",
+    )
+    p.add_argument(
+        "--launch",
+        action="store_true",
+        help="Actually start the two contracted containers (idempotent: "
+        "any existing container with the same name is removed first). "
+        "Each container's stdout/stderr is captured via "
+        "`docker logs -f` redirected to the corresponding --launcher-log-* "
+        "path, so AC-7 step (d) (log grep for snapshot path) can run. "
+        "Use --host-lane-* to launch on remote hosts via ssh.",
+    )
+    p.add_argument(
+        "--strict-log-check",
+        action="store_true",
+        help="Treat missing or unverified launcher logs as a hard failure "
+        "instead of a warning. Required mode for the sweep runner so a "
+        "silent log gap cannot let an unverified server serve benchmark "
+        "traffic.",
+    )
+    p.add_argument(
+        "--host",
+        default=None,
+        help="Host to launch both containers on (passed to ssh). When unset "
+        "or 'localhost', launches locally. Mutually exclusive use: a "
+        "single preflight invocation can launch one host's pair; for the "
+        "parallel-by-lane sweep run preflight twice (once per host).",
+    )
+    p.add_argument(
+        "--ready-timeout-s",
+        type=int,
+        default=600,
+        help="Max seconds to wait for each server's /v1/models to respond "
+        "after --launch (default: 600).",
     )
     p.add_argument(
         "--port-omni",
@@ -405,17 +531,25 @@ def parse_args() -> argparse.Namespace:
 def _check_launcher_logs(
     args: argparse.Namespace, report: PreflightReport
 ) -> None:
-    """Verify launcher logs reference resolved snapshot paths (AC-7 step d)."""
+    """Verify launcher logs reference resolved snapshot paths (AC-7 step d).
+
+    With ``--strict-log-check`` set (sweep mode), every missing or
+    non-matching log is fatal. Without the flag (operator dev mode),
+    missing logs degrade to a warning so the gate is still usable when
+    the operator wants to inspect status without having run a sweep yet.
+    """
     pairs = [
         ("omni", args.launcher_log_omni, "Qwen/Qwen3-Omni-30B-A3B-Instruct"),
         ("sglang", args.launcher_log_sglang, "Qwen/Qwen3-VL-30B-A3B-Instruct"),
     ]
+    strict = bool(getattr(args, "strict_log_check", False))
     for backend_tag, log_path, repo_id in pairs:
         if not log_path:
-            report.warn(
+            msg = (
                 f"--launcher-log-{backend_tag} not provided; cannot verify the "
                 f"{backend_tag} server actually loaded the pinned snapshot."
             )
+            (report.fail if strict else report.warn)(msg)
             continue
         snapshot = report.snapshot_paths.get(repo_id)
         if not snapshot:
@@ -501,6 +635,82 @@ def main() -> int:
                     f"Re-run with --download to materialize it, or pre-populate "
                     f"the HF cache before the sweep launches."
                 )
+
+    # 1b. Optional: actually launch the contracted containers and capture
+    # their launcher logs. AC-7 step (c) -- replaces the Round 1
+    # print-commands half-step with real execution. Failure here is fatal
+    # because the rest of the gate has no servers to probe.
+    if args.launch and report.ok:
+        snapshot_omni = report.snapshot_paths.get(
+            "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+        )
+        snapshot_sglang = report.snapshot_paths.get(
+            "Qwen/Qwen3-VL-30B-A3B-Instruct"
+        )
+        if not snapshot_omni or not snapshot_sglang:
+            report.fail(
+                "--launch requested but at least one snapshot path is missing; "
+                "cannot start containers without pinned mounts."
+            )
+        else:
+            log_omni = args.launcher_log_omni or "/tmp/sglang-omni-benchmark.log"
+            log_sglang = args.launcher_log_sglang or "/tmp/sglang-benchmark.log"
+            ok_omni = launch_named_container(
+                name="sglang-omni-hayden-benchmark",
+                image="frankleeeee/sglang-omni:dev",
+                snapshot_path=snapshot_omni,
+                server_cmd=[
+                    "sgl-omni",
+                    "serve",
+                    "--model-path",
+                    "/snapshot",
+                    "--text-only",
+                    "--port",
+                    str(args.port_omni),
+                ],
+                log_path=log_omni,
+                host=args.host,
+            )
+            ok_sglang = launch_named_container(
+                name="sglang-hayden-benchmark",
+                image="lmsysorg/sglang",
+                snapshot_path=snapshot_sglang,
+                server_cmd=[
+                    "python",
+                    "-m",
+                    "sglang.launch_server",
+                    "--model-path",
+                    "/snapshot",
+                    "--port",
+                    str(args.port_sglang),
+                ],
+                log_path=log_sglang,
+                host=args.host,
+            )
+            if not ok_omni:
+                report.fail("Failed to launch sglang-omni-hayden-benchmark.")
+            if not ok_sglang:
+                report.fail("Failed to launch sglang-hayden-benchmark.")
+            # Wait for both servers to report healthy via /v1/models.
+            if ok_omni and not wait_for_v1_models(
+                args.base_url_omni, args.ready_timeout_s
+            ):
+                report.fail(
+                    f"sglang-omni-hayden-benchmark did not report ready on "
+                    f"{args.base_url_omni}/v1/models within {args.ready_timeout_s}s."
+                )
+            if ok_sglang and not wait_for_v1_models(
+                args.base_url_sglang, args.ready_timeout_s
+            ):
+                report.fail(
+                    f"sglang-hayden-benchmark did not report ready on "
+                    f"{args.base_url_sglang}/v1/models within {args.ready_timeout_s}s."
+                )
+            # The log files now exist (the follower started writing to them
+            # when the container began emitting output). Pin them so the
+            # downstream log-check step uses these paths.
+            args.launcher_log_omni = log_omni
+            args.launcher_log_sglang = log_sglang
 
     # 2. Container checks (skippable for dev-box dry-runs).
     if not args.skip_container_check:

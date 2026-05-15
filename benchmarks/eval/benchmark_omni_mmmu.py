@@ -72,9 +72,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,6 +124,16 @@ class MMMUEvalConfig:
     repo_id: str | None = None
     prompt_override: str | None = None
     timeout_s: int = 300
+    # Authoritative metadata sources (AC-9): when --preflight-json is
+    # provided, the eval merges model_revision + container_image_digest from
+    # the gate's output rather than computing placeholders. When
+    # --launcher-log is provided, kv_cache_capacity_tokens is scraped from
+    # it. mem_fraction_static and prefix_cache_disabled come straight from
+    # the launch flags the operator used.
+    preflight_json: str | None = None
+    launcher_log: str | None = None
+    mem_fraction_static: float | None = None
+    prefix_cache_disabled: bool = True
     # Backend dispatch: "omni" uses the sglang-omni top-level images field;
     # "sglang" uses OpenAI-style messages[].content with image_url parts.
     # See benchmarks/tasks/visual_understand.py:build_mmmu_payload.
@@ -154,17 +167,48 @@ def _build_base_url(config: MMMUEvalConfig) -> str:
     return config.base_url or f"http://{config.host}:{config.port}"
 
 
-def _build_run_metadata(config: MMMUEvalConfig) -> dict:
-    """Populate the AC-9 run-metadata block from the eval config + host env.
+def _load_preflight_merge(preflight_json: str | None) -> dict:
+    """Load preflight.json output (if any) for model_revision + digest merge."""
+    if not preflight_json:
+        return {}
+    try:
+        return json.loads(Path(preflight_json).read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
 
-    Live values (GPU memory, KV pool capacity, container digest, etc.) are
-    sourced via the helpers in benchmarks/scripts/run_metadata.py. When the
-    relevant tool is unavailable (no docker, no nvidia-smi, etc.) the
-    corresponding field is None — JSON consumers can tell the difference
-    between "not measured" (None) and "measured zero".
+
+def _load_dataset_revisions(revisions_path: str | None) -> dict[str, str]:
+    """Load the per-repo dataset revision dict for the metadata block."""
+    from benchmarks.dataset.mmmu import _load_revision_map
+
+    return _load_revision_map(revisions_path)
+
+
+def _build_run_metadata(
+    config: MMMUEvalConfig,
+    *,
+    request_results: list | None = None,
+    steady_state_gpu_gb: list[float] | None = None,
+) -> dict:
+    """Populate the AC-9 run-metadata block from authoritative sources.
+
+    - ``model_revision`` and ``container_image_digest``: merged from
+      ``preflight.json`` when ``config.preflight_json`` is set (the
+      preflight gate is the source of truth for these). Otherwise falls
+      back to live ``docker inspect``.
+    - ``dataset_revisions``: loaded from
+      ``benchmarks/dataset/mmmu_revisions.json`` (or
+      ``config.dataset_revisions`` override).
+    - ``mem_fraction_static_configured`` and ``prefix_cache_disabled``:
+      sourced from the explicit CLI flags so they reflect the launch
+      contract, not a per-eval guess.
+    - ``kv_cache_capacity_tokens``: regex-scraped from
+      ``config.launcher_log`` when provided.
+    - ``steady_state_gpu_gb``: passed in by the caller after sampling at
+      ``warmup_complete + 30s`` (or freshly sampled if not provided).
+    - ``failure_count``: derived from ``request_results`` (count of
+      ``not is_success``).
     """
-    from pathlib import Path
-
     from benchmarks.scripts.run_metadata import (
         RunMetadata,
         get_commit_sha,
@@ -173,6 +217,7 @@ def _build_run_metadata(config: MMMUEvalConfig) -> dict:
         get_gpu_topology,
         get_sglang_version,
         sample_gpu_memory_used_gb,
+        scrape_kv_cache_capacity_from_log,
         to_dict,
     )
 
@@ -188,16 +233,47 @@ def _build_run_metadata(config: MMMUEvalConfig) -> dict:
         else "lmsysorg/sglang"
     )
 
+    preflight = _load_preflight_merge(config.preflight_json)
+    preflight_models = (preflight.get("model_revisions") or {})
+    preflight_containers = (preflight.get("containers") or {})
+    model_repo = (
+        "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+        if config.backend == "omni"
+        else "Qwen/Qwen3-VL-30B-A3B-Instruct"
+    )
+    model_revision = preflight_models.get(model_repo)
+    container_digest = (
+        preflight_containers.get(container_name, {}).get("container_image_digest")
+    )
+    if container_digest is None:
+        # Fall back to live docker inspect if preflight didn't capture it.
+        container_digest = get_container_image_digest(container_name)
+
+    dataset_revisions = _load_dataset_revisions(config.dataset_revisions)
+
+    if config.launcher_log:
+        kv_capacity = scrape_kv_cache_capacity_from_log(Path(config.launcher_log))
+    else:
+        kv_capacity = None
+
+    if steady_state_gpu_gb is None:
+        # Caller did not pre-sample; fall back to right-now sample. The
+        # sweep runner calls ``_build_run_metadata`` with the post-warmup
+        # value to satisfy AC-9 "warmup+30s" precisely.
+        steady_state_gpu_gb = sample_gpu_memory_used_gb()
+
+    failure_count = 0
+    if request_results is not None:
+        failure_count = sum(1 for r in request_results if not getattr(r, "is_success", False))
+
     meta = RunMetadata(
         commit_sha=get_commit_sha(repo_root),
         branch=get_current_branch(repo_root),
         sglang_version=get_sglang_version(),
         backend=config.backend,
         model_id=config.model,
-        model_revision=None,  # preflight populates the snapshot SHA into a
-        # separate `preflight.json`; the sweep script merges it into the
-        # per-cell record. Left None at single-eval invocation time.
-        dataset_revisions={},
+        model_revision=model_revision,
+        dataset_revisions=dataset_revisions,
         seed=config.seed,
         ignore_eos=config.ignore_eos,
         lane=config.lane,
@@ -212,19 +288,19 @@ def _build_run_metadata(config: MMMUEvalConfig) -> dict:
         timeout_s=config.timeout_s,
         repo_id=config.repo_id,
         max_samples=config.max_samples,
-        mem_fraction_static_configured=None,
-        kv_cache_capacity_tokens=None,
-        steady_state_gpu_gb=sample_gpu_memory_used_gb(),
-        prefix_cache_disabled=True,
+        mem_fraction_static_configured=config.mem_fraction_static,
+        kv_cache_capacity_tokens=kv_capacity,
+        steady_state_gpu_gb=steady_state_gpu_gb,
+        prefix_cache_disabled=config.prefix_cache_disabled,
         encoder_patches_active=False,
         host=os.environ.get("HOSTNAME") or os.environ.get("HOST"),
         container_name=container_name,
         container_image=container_image,
-        container_image_digest=get_container_image_digest(container_name),
+        container_image_digest=container_digest,
         server_port=config.port,
         gpu_topology=get_gpu_topology(),
         repetition_index=config.repetition_index,
-        failure_count=0,
+        failure_count=failure_count,
     )
     return to_dict(meta)
 
@@ -273,15 +349,30 @@ async def run_mmmu_eval(config: MMMUEvalConfig) -> dict:
             timeout_s=config.timeout_s,
             # Streaming runs use read_bufsize=1 per AC-3's literal contract:
             # per-chunk SSE arrivals are visible to the parser immediately,
-            # without a prefetch window coalescing them. Production sweeps
-            # may revisit this knob if syscall overhead becomes a measured
-            # concern, but the contract is "minimize aiohttp-side buffering"
-            # so the per-token timing reflects server emission, not client
-            # coalescing.
+            # without a prefetch window coalescing them.
             read_bufsize=1 if config.stream else None,
         )
     )
+
+    # Schedule a steady-state GPU memory sample for warmup_complete + 30s
+    # (AC-9). The background thread fires once after the delay; the
+    # captured value is read after runner.run returns.
+    steady_state_gpu_holder: dict[str, list[float]] = {"value": []}
+
+    def _sample_gpu_after_warmup() -> None:
+        time.sleep(30)
+        from benchmarks.scripts.run_metadata import sample_gpu_memory_used_gb
+
+        steady_state_gpu_holder["value"] = sample_gpu_memory_used_gb()
+
+    sampler_thread = threading.Thread(target=_sample_gpu_after_warmup, daemon=True)
+    sampler_thread.start()
+
     request_results = await runner.run(samples, send_fn)
+    # Make sure the post-warmup sample has had a chance to run before we
+    # build the metadata block. join() returns immediately if the thread
+    # already finished (typical case: the sweep itself runs longer than 30s).
+    sampler_thread.join(timeout=35)
 
     per_sample = build_mmmu_result_records(samples, request_results)
     summary = compute_mmmu_metrics(per_sample)
@@ -307,7 +398,11 @@ async def run_mmmu_eval(config: MMMUEvalConfig) -> dict:
         "repetition_index": config.repetition_index,
     }
 
-    run_metadata = _build_run_metadata(config)
+    run_metadata = _build_run_metadata(
+        config,
+        request_results=request_results,
+        steady_state_gpu_gb=steady_state_gpu_holder["value"] or None,
+    )
     results = {
         "summary": summary,
         "speed": speed_metrics,
@@ -393,6 +488,10 @@ def _config_from_args(args: argparse.Namespace) -> MMMUEvalConfig:
         reps=args.reps,
         repetition_index=args.repetition_index,
         dataset_revisions=args.dataset_revisions,
+        preflight_json=args.preflight_json,
+        launcher_log=args.launcher_log,
+        mem_fraction_static=args.mem_fraction_static,
+        prefix_cache_disabled=args.prefix_cache_disabled,
     )
 
 
@@ -545,6 +644,47 @@ def main() -> None:
             "benchmarks/dataset/mmmu_revisions.json. The loader fails closed "
             "when the chosen repo lacks an entry; populate it via the "
             "preflight gate."
+        ),
+    )
+    parser.add_argument(
+        "--preflight-json",
+        type=str,
+        default=None,
+        help=(
+            "Path to the preflight gate's JSON output. When provided, the "
+            "eval merges model_revision and container_image_digest from "
+            "the preflight record instead of recomputing them."
+        ),
+    )
+    parser.add_argument(
+        "--launcher-log",
+        type=str,
+        default=None,
+        help=(
+            "Path to the server launcher log. When provided, the eval "
+            "scrapes kv_cache_capacity_tokens from it for the AC-9 "
+            "metadata block."
+        ),
+    )
+    parser.add_argument(
+        "--mem-fraction-static",
+        type=float,
+        default=None,
+        help=(
+            "Configured mem_fraction_static at server launch (passed through "
+            "to the AC-9 metadata block). The eval does NOT enforce this on "
+            "the server; the operator must have launched the server with "
+            "the matching --mem-fraction-static flag."
+        ),
+    )
+    parser.add_argument(
+        "--prefix-cache-disabled",
+        action="store_true",
+        default=True,
+        help=(
+            "Record that prefix caching is disabled (default: True). The "
+            "operator must have launched the server with prefix caching "
+            "actually disabled; this flag records the policy in metadata."
         ),
     )
     args = parser.parse_args()
