@@ -51,6 +51,7 @@ MODEL_SGLANG="Qwen/Qwen3-VL-30B-A3B-Instruct"
 PORT_OMNI=30000
 PORT_SGLANG=30001
 SAMPLES=""        # empty = full MMMU (~900 samples)
+REPO_ID=""        # empty = default repo (full MMMU); set to zhaochenyang20/mmmu-ci-50 for curated subset
 CONCURRENCY=8
 MEM_FRACTION="0.9"
 PREFLIGHT_REMOTE="/tmp/preflight.json"
@@ -99,6 +100,7 @@ while [[ $# -gt 0 ]]; do
         --serial) SERIAL=1; shift;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift;;
         --samples) SAMPLES="$2"; shift 2;;
+        --repo-id) REPO_ID="$2"; shift 2;;
         --concurrency) CONCURRENCY="$2"; shift 2;;
         --mem-fraction) MEM_FRACTION="$2"; shift 2;;
         -h|--help) usage; exit 0;;
@@ -195,6 +197,9 @@ run_cell() {
     )
     if [[ -n "$SAMPLES" ]]; then
         cmd+=(--max-samples "$SAMPLES")
+    fi
+    if [[ -n "$REPO_ID" ]]; then
+        cmd+=(--repo-id "$REPO_ID")
     fi
 
     echo "[sweep] cell host=$host backend=$backend lane=$lane rep=$rep_idx"
