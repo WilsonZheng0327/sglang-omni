@@ -1,18 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the run-metadata block emitted alongside each MMMU sweep result.
 
-The metadata block captures every reproducibility-relevant knob: code SHAs,
-serving stack versions, model + dataset revisions, sampling configuration,
-mem-fraction and KV-cache settings, the configured (not just observed)
-prefix-cache policy, encoder-patch activation state, the H200 host the
-cell ran on, container identity and image digest, and per-rep bookkeeping.
-
-This module is callable both from the eval harness (to inline metadata
-into each result JSON) and from the sweep script (to stamp a single
-metadata blob across paired reps). All shell-out helpers (``docker
-inspect``, ``nvidia-smi``, ``importlib.metadata``) gracefully degrade to
-``None`` when their inputs are missing so the same emitter works on
-non-GPU dev boxes and inside the H200 containers.
+Captures every reproducibility-relevant knob: code SHAs, serving stack
+version, model + dataset revisions, sampling config, mem-fraction +
+KV-cache, prefix-cache policy, encoder-patch state, host, container
+identity + digest, per-rep bookkeeping. Shell-out helpers (docker inspect,
+nvidia-smi, importlib.metadata) degrade to None when inputs are missing.
 """
 
 from __future__ import annotations
@@ -29,20 +22,15 @@ from typing import Any
 
 @dataclass
 class RunMetadata:
-    """All fields required by the run-metadata block of the issue #379 closure plan."""
-
-    # Code SHAs
     commit_sha: str | None = None
     branch: str | None = None
     sglang_version: str | None = None
 
-    # Backend + model identity
     backend: str = "omni"
     model_id: str | None = None
     model_revision: str | None = None
     dataset_revisions: dict[str, str] = field(default_factory=dict)
 
-    # Sampling + lane config
     seed: int | None = None
     ignore_eos: bool = False
     lane: str = "A"
@@ -56,17 +44,15 @@ class RunMetadata:
     repo_id: str | None = None
     max_samples: int | None = None
 
-    # Memory + cache policy (POLICY enforced via launch flag, not just observed)
+    # mem_fraction_static_configured + prefix_cache_disabled are sourced from
+    # the recorded launch_command, not the eval CLI declarations.
     mem_fraction_static_configured: float | None = None
     kv_cache_capacity_tokens: int | None = None
     steady_state_gpu_gb: list[float] = field(default_factory=list)
     prefix_cache_disabled: bool = True
 
-    # Encoder-patch activation state (PR #436 dormant unless a production
-    # caller wires apply_qwen3_vl_hf_parity_patches into the load path).
     encoder_patches_active: bool = False
 
-    # Hardware + container identity
     host: str | None = None
     container_name: str | None = None
     container_image: str | None = None
@@ -74,7 +60,6 @@ class RunMetadata:
     server_port: int | None = None
     gpu_topology: str | None = None
 
-    # Per-rep bookkeeping
     repetition_index: int = 0
     failure_count: int = 0
 
@@ -114,14 +99,7 @@ def get_sglang_version() -> str | None:
 
 
 def get_container_image_digest(container_name: str) -> str | None:
-    """Resolve the sha256 image digest a running container is using.
-
-    Returns None when docker is not available or the container does not
-    exist. The fmt string yields one of:
-      - ``sha256:abc...`` when the image is a content-addressed reference
-      - the image name (e.g. ``lmsysorg/sglang:latest``) when no digest
-        is known
-    """
+    """Resolve the running container's image digest (sha256:... or image ref). None when docker is unavailable."""
     if shutil.which("docker") is None:
         return None
     try:
@@ -142,11 +120,9 @@ def get_container_image_digest(container_name: str) -> str | None:
 
 
 def sample_gpu_memory_used_gb() -> list[float]:
-    """Sample per-GPU memory.used in GB via nvidia-smi.
+    """Per-GPU memory.used in GB via nvidia-smi. Empty list when nvidia-smi is unavailable.
 
-    Returns an empty list when nvidia-smi is unavailable (e.g. on a macOS
-    dev box). Callers that need authoritative numbers should call this
-    at ``warmup_complete + 30s`` per the plan's steady-state contract.
+    Call at ``warmup_complete + 30s`` for the plan's steady-state contract.
     """
     if shutil.which("nvidia-smi") is None:
         return []
@@ -193,12 +169,7 @@ _KV_POOL_LINE = re.compile(
 
 
 def scrape_kv_cache_capacity_from_log(log_path: Path) -> int | None:
-    """Find the SGLang KV pool init log line and return its token capacity.
-
-    The exact wording shifts between SGLang releases; the regex above
-    matches "KV-cache pool ... capacity X tokens" and similar. Returns
-    None when no line matches.
-    """
+    """Return the KV pool token capacity scraped from the SGLang launcher log, or None."""
     if not log_path.exists():
         return None
     try:

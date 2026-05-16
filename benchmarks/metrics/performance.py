@@ -34,10 +34,9 @@ def _compute_token_metrics(successes: list[RequestResult]) -> dict:
     total_tokens = sum(gen_token_counts)
     prompt_token_counts = [o.prompt_tokens for o in successes if o.prompt_tokens > 0]
 
-    # Bucket requests by which timing field is authoritative. A request whose
-    # timing_source is unset falls back to a legacy bucket so existing JSON
-    # consumers that read engine_time_s continue to see a number, but the
-    # explicit *_engine_agg / *_clientwall_agg keys are the truthful ones.
+    # Bucket by authoritative timing field; unset timing_source goes into the
+    # legacy bucket for backward compat, but *_engine_agg / *_clientwall_agg
+    # are the truthful keys for migrated paths.
     engine_timed = [
         o for o in successes if o.timing_source == "engine_time_s" and o.engine_time_s > 0
     ]
@@ -73,11 +72,8 @@ def _compute_token_metrics(successes: list[RequestResult]) -> dict:
             token_metrics["tok_per_s_clientwall_agg"] = round(
                 clientwall_tokens / clientwall_time, 1
             )
-    # Legacy fallback for results that never set timing_source. New
-    # migrated paths (TTS / MMMU / audio / video) all carry a
-    # timing_source, so ``tok_per_s_agg`` only appears when the data
-    # genuinely lacks the schema migration. Consumers should read the
-    # explicit per-source aggregate keys.
+    # tok_per_s_agg only emitted when the data genuinely predates the
+    # timing_source migration; migrated paths use the explicit aggregate keys.
     if legacy_timed and not engine_timed and not clientwall_timed:
         legacy_tokens = sum(o.completion_tokens for o in legacy_timed)
         legacy_time = sum(o.engine_time_s for o in legacy_timed)
@@ -96,15 +92,11 @@ def _compute_token_metrics(successes: list[RequestResult]) -> dict:
 
 
 def _compute_streaming_metrics(successes: list[RequestResult]) -> dict:
-    """Compute TTFT and inter-content-chunk latency stats from streaming runs.
+    """TTFT + inter-content-chunk stats from streaming runs.
 
-    Only requests whose ``ttft_s`` is not None contribute. Inter-chunk
-    intervals are pooled across requests (every interval from every request
-    enters one common pool, then summarized). Single-content-chunk responses
-    contribute to the TTFT pool but not to the interval pool.
-
-    Returns an empty dict when no streaming data is present (so non-streaming
-    runs do not emit zero-stuffed streaming keys).
+    Inter-chunk intervals pooled across all requests. Single-chunk responses
+    contribute to TTFT but not to interval stats. Returns {} when no
+    streaming data present.
     """
     streaming_results = [o for o in successes if o.ttft_s is not None]
     if not streaming_results:
@@ -116,10 +108,8 @@ def _compute_streaming_metrics(successes: list[RequestResult]) -> dict:
     metrics["ttft_p50_s"] = round(float(np.percentile(ttft_values_s, 50)), 4)
     metrics["ttft_p95_s"] = round(float(np.percentile(ttft_values_s, 95)), 4)
 
-    # Pool all inter-content-chunk intervals across requests. For each request,
-    # intervals are differences between consecutive content-chunk offsets, plus
-    # one initial interval from request send to the first chunk (which equals
-    # TTFT and is already covered separately, so we exclude it here).
+    # Pool intervals across requests. The send→first-chunk interval equals
+    # TTFT and is excluded here (covered separately above).
     pooled_intervals_ms: list[float] = []
     requests_with_intervals = 0
     for o in streaming_results:
@@ -145,10 +135,8 @@ def _compute_streaming_metrics(successes: list[RequestResult]) -> dict:
             float(np.percentile(intervals_s, 99)), 4
         )
     else:
-        # All streaming responses had at most one content chunk. Emit the
-        # interval keys as None so the report distinguishes "no streaming
-        # run" (key absent) from "streaming run with no inter-chunk data"
-        # (key present, value None).
+        # Single-chunk-only streaming run. Emit None (vs key-absent for
+        # non-streaming) so consumers can distinguish the two cases.
         metrics["inter_content_chunk_mean_s"] = None
         metrics["inter_content_chunk_p50_s"] = None
         metrics["inter_content_chunk_p99_s"] = None
@@ -292,10 +280,7 @@ def _request_result_to_dict(output: RequestResult) -> dict:
             else None
         ),
         "tok_per_s": round(output.tok_per_s, 1) if output.tok_per_s > 0 else None,
-        # Streaming fields preserve their default zero/empty values for
-        # non-streaming runs so a JSON consumer can distinguish
-        # "streaming ran with no content" from "no streaming at all" by
-        # checking ttft_s (None when not streamed).
+        # ttft_s=None signals "not streamed" (vs 0 = streamed but no content).
         "ttft_s": round(output.ttft_s, 4) if output.ttft_s is not None else None,
         "content_chunk_offsets_ms": list(output.content_chunk_offsets_ms),
         "content_chunk_count": output.content_chunk_count,

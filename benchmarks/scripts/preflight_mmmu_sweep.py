@@ -2,36 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Preflight gate for the MMMU sweep on H200 hosts.
 
-Verifies that everything the sweep depends on is bit-pinned and
-contractually correct before any GPU time is spent. Failures here are
-designed to be louder and earlier than failures during the sweep itself.
+Verifies before GPU time is spent: HF model revisions resolve + snapshots
+exist; the two named containers run the expected images and pass /v1/models;
+launcher.log references the resolved snapshot path; SGLang accepts an
+``image_url`` data-URI request; every dataset repo the sweep will load is
+pinned in ``benchmarks/dataset/mmmu_revisions.json``.
 
-What the gate verifies:
-
-1. HuggingFace model revisions for ``Qwen/Qwen3-VL-30B-A3B-Instruct`` and
-   ``Qwen/Qwen3-Omni-30B-A3B-Instruct`` resolve and are recorded.
-2. A local snapshot for each model exists at the snapshot directory
-   (created via ``huggingface-cli download --revision <sha>`` if
-   ``--download`` is passed).
-3. The two named benchmark containers exist with the expected images:
-   - ``sglang-omni-hayden-benchmark`` ← ``frankleeeee/sglang-omni:dev``
-   - ``sglang-hayden-benchmark``       ← ``lmsysorg/sglang:dev``
-   Container names are enforced strictly. Image digests captured via
-   ``docker inspect`` are recorded in the preflight output JSON.
-4. Each running server's ``/v1/models`` endpoint returns the expected
-   model identifier.
-5. The launcher log on each container records loading from the expected
-   local snapshot path (regex match against the snapshot directory).
-6. A single ``image_url`` data-URI request to the SGLang server returns
-   HTTP 200 (proves stock SGLang accepts data-URIs as the omni-side
-   payload translator emits them).
-7. Dataset revision pinning: every entry the sweep config will request is
-   present in ``benchmarks/dataset/mmmu_revisions.json``. When
-   ``--update-revisions`` is passed, this gate resolves current
-   HuggingFace dataset SHAs and writes them into that file.
-
-The gate writes a JSON report to ``--output`` and exits non-zero on any
-failure. Every named contract violation is reported with its remedy.
+Writes a JSON report to ``--output``. Exits non-zero on any failure.
 """
 
 from __future__ import annotations
@@ -175,11 +152,8 @@ def check_container(
                 f"Container {name!r} is running image {image_ref!r}, expected {expected_image!r}. "
                 f"Stop/remove the container and restart from the contracted image."
             )
-    # Launch-evidence preservation: merge into the existing record so any
-    # `launch_command` / `snapshot_path` written by an earlier
-    # ``launch_named_container`` call survives this inspection pass. A
-    # wholesale `=` assignment here would silently drop the launch
-    # evidence the downstream eval needs to derive launch policy.
+    # Merge (not overwrite) so launch_command/snapshot_path written by an
+    # earlier launch_named_container() call survives this inspect pass.
     report.containers.setdefault(name, {}).update(info)
 
 
@@ -386,23 +360,13 @@ def launch_named_container(
     host: str | None = None,
     record: dict | None = None,
 ) -> bool:
-    """Launch one benchmark container and tee its launcher log to disk.
-
-    Implements the launch step of the gate: actually starts the
-    contracted container and captures its launcher output so the
-    snapshot-path log-grep can run afterwards. The capture uses
-    ``docker logs -f <name> > <log_path> 2>&1`` because the container
-    itself runs detached (``-d``), so the only way to retain its stdout
-    is to attach a follower. The follower runs in the background; the
-    sweep proceeds once ``/v1/models`` reports healthy.
-
-    Returns True on a successful ``docker run`` invocation; the caller
-    is responsible for the readiness probe + log verification steps.
+    """Launch one named container detached and start a `docker logs -f` follower
+    that tees stdout/stderr into ``log_path``. Returns True on successful
+    ``docker run``; caller runs the readiness probe + log verification.
     """
     prefix = _shell_prefix(host)
 
-    # Idempotent stop+remove so re-running the preflight on the same host
-    # never errors out on "container name already in use".
+    # Idempotent: re-running preflight must not hit "name already in use".
     subprocess.run(
         prefix + ["docker", "rm", "-f", name],
         stdout=subprocess.DEVNULL,
@@ -425,9 +389,8 @@ def launch_named_container(
         image,
         *server_cmd,
     ]
-    # Record the exact command so the downstream prefix_cache_disabled /
-    # mem_fraction metadata values can be cross-checked against the
-    # actual launch flags later.
+    # Record the launch tokens so the eval can derive prefix_cache_disabled
+    # and mem_fraction_static from real flags, not CLI declarations.
     if record is not None:
         record["launch_command"] = run_cmd
         record["snapshot_path"] = snapshot_path
@@ -436,8 +399,7 @@ def launch_named_container(
     except subprocess.CalledProcessError:
         return False
 
-    # Attach a log follower. Remote hosts need the redirection to happen on
-    # the remote side, so wrap in a shell invocation when over SSH.
+    # Remote: redirect on the remote side via shell; local: pipe via Popen.
     if prefix:
         remote_shell_cmd = (
             f"docker logs -f {name} > {log_path} 2>&1"
@@ -456,13 +418,7 @@ def launch_named_container(
 def wait_for_v1_models(
     base_url: str, timeout_s: int = 600, host: str | None = None
 ) -> bool:
-    """Poll /v1/models until 200 or timeout.
-
-    When ``host`` is set to a remote machine, the probe runs over SSH via
-    ``ssh <host> curl ...`` so the readiness check actually talks to the
-    same machine that launched the container, not the orchestrator's
-    localhost.
-    """
+    """Poll /v1/models until 200 or timeout. With ``host`` set, probes over SSH."""
     url = base_url.rstrip("/") + "/v1/models"
     deadline = time.monotonic() + timeout_s
     prefix = _shell_prefix(host)
@@ -535,11 +491,6 @@ def print_launch_commands(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Preflight gate for the MMMU sweep.")
-    # Note: a previous iteration carried --host-lane-a / --host-lane-b
-    # options here. They were never wired into the per-stage verification;
-    # the sweep ssh's into each host and invokes preflight once per host
-    # with --host. Keeping them as dead options invited "launch on host X,
-    # verify on host Y" footguns and they have been removed.
     p.add_argument(
         "--base-url-omni",
         default="http://localhost:30000",
@@ -667,12 +618,10 @@ def parse_args() -> argparse.Namespace:
 def _check_launcher_logs(
     args: argparse.Namespace, report: PreflightReport
 ) -> None:
-    """Verify launcher logs reference resolved snapshot paths.
+    """Verify each launcher log references the resolved snapshot path.
 
-    With ``--strict-log-check`` set (sweep mode), every missing or
-    non-matching log is fatal. Without the flag (operator dev mode),
-    missing logs degrade to a warning so the gate is still usable when
-    the operator wants to inspect status without having run a sweep yet.
+    With ``--strict-log-check`` set, missing or non-matching logs are fatal;
+    otherwise they degrade to a warning.
     """
     pairs = [
         ("omni", args.launcher_log_omni, "Qwen/Qwen3-Omni-30B-A3B-Instruct"),

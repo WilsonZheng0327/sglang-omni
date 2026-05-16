@@ -223,15 +223,10 @@ def parse_multi_choice_response(
 
 
 def assert_sglang_payload_order_contract(payload: dict) -> None:
-    """Validate an SGLang-style payload obeys the image-then-text part order.
+    """Validate ``[image_url..., text]`` part order on an SGLang payload.
 
-    Mirrors ``Qwen3OmniPreprocessor._build_multimodal_messages`` at
-    ``sglang_omni/models/qwen3_omni/components/preprocessor.py:158``,
-    which puts image placeholders BEFORE text. Used both as a runtime
-    sanity check and as a target for negative tests that hand-build a
-    text-first payload and assert this validator rejects it.
-
-    Raises ValueError on contract violation.
+    Mirrors ``Qwen3OmniPreprocessor._build_multimodal_messages``: image
+    placeholders come BEFORE text. Raises ValueError on violation.
     """
     messages = payload.get("messages") or []
     if not messages:
@@ -271,25 +266,13 @@ def build_mmmu_payload(
 ) -> dict:
     """Render the chat-completions payload for one MMMU sample.
 
-    Two backend dialects are supported:
+    ``backend="omni"`` → top-level ``images`` field + plain string prompt.
+    ``backend="sglang"`` → OAI ``messages[].content`` part-list in order
+    ``[image_url..., text]``, mirroring ``_build_multimodal_messages``
+    (image placeholders BEFORE text).
 
-    - ``backend="omni"`` uses sglang-omni's top-level ``images`` field with
-      data-URI strings positional in the dataset image order. ``messages``
-      contains a single user message whose ``content`` is the plain prompt
-      string.
-    - ``backend="sglang"`` uses OpenAI-style ``messages[].content`` as a
-      list of typed parts in order
-      ``[image_url part for image_1, ..., image_url part for image_N, text part]``.
-      This mirrors ``Qwen3OmniPreprocessor._build_multimodal_messages()``
-      at ``sglang_omni/models/qwen3_omni/components/preprocessor.py:158``,
-      which documents ``"Placeholders come BEFORE text (Qwen3-Omni
-      format)"`` — the SGLang payload must respect the same positional
-      contract for the comparison to be semantically equivalent.
-
-    Both backends carry the same ``model``, ``modalities``,
-    ``max_tokens``, ``temperature``, ``stream``, and optional ``seed`` /
-    ``ignore_eos`` fields so the only request-shape delta is the
-    image-attachment convention.
+    All other request fields (model/modalities/max_tokens/temperature/stream/
+    seed/ignore_eos) are identical across backends.
     """
     image_uris = [image_to_data_uri(img) for img in sample.images]
 
@@ -335,28 +318,15 @@ async def consume_sse_stream(
     *,
     clock: Callable[[], float] = time.perf_counter,
 ) -> None:
-    """Consume an SSE chat-completions stream and populate result in place.
+    """Consume an SSE chat-completions stream and populate ``result`` in place.
 
-    Frame classification (mirroring ``sglang_omni/serve/openai_api.py``
-    ``_chat_stream`` at lines 257-355):
+    Frame classes: ``[DONE]`` sentinel (skip); role-only delta (skip);
+    content delta (timestamp via offset from ``request_send_time``,
+    concat into result.text, increment count); finish chunk (extract usage
+    if present, not timed).
 
-    - ``data: [DONE]`` sentinel: end of stream; not timed, not parsed.
-    - Role-only frame (``delta.role`` set, no ``delta.content``): parsed
-      but neither timed nor concatenated. Skipped silently.
-    - Content delta frame (non-empty ``delta.content``): timestamped via
-      a relative offset from ``request_send_time``; text concatenated
-      into ``result.text``; ``content_chunk_count`` incremented.
-    - Finish chunk (``finish_reason`` set, possibly carrying ``usage``):
-      parsed for ``prompt_tokens`` / ``completion_tokens`` extraction
-      but not timed.
-
-    TCP read boundaries do not align with SSE frame boundaries; the
-    parser buffers raw bytes and only acts on completed ``data: <json>``
-    frames terminated by ``\\n\\n``.
-
-    The ``clock`` parameter exists for deterministic unit tests; supply a
-    fake callable that returns scripted floats to drive specific
-    timestamps. In production, leave the default ``time.perf_counter``.
+    Parser buffers raw bytes since TCP read boundaries don't align with
+    SSE ``data: <json>\\n\\n`` frames. ``clock`` is overridable for tests.
     """
     buffer = bytearray()
     saw_done = False
@@ -402,7 +372,6 @@ async def consume_sse_stream(
                     usage = frame.get("usage")
                     if isinstance(usage, dict):
                         final_usage = usage
-                # else: role-only frame, parsed but ignored for timing/concat.
 
         if saw_done:
             break
@@ -440,22 +409,14 @@ def make_mmmu_send_fn(
     enable_audio: bool = False,
     audio_dir: str | None = None,
 ) -> SendFn:
-    """Return a *send_fn* that sends an MMMUSample to /v1/chat/completions.
+    """Build a *send_fn* that POSTs an MMMUSample to /v1/chat/completions.
 
-    ``backend="omni"`` uses sglang-omni's top-level ``images`` field;
-    ``backend="sglang"`` uses OpenAI-style ``messages[].content`` parts.
-    See ``build_mmmu_payload`` for the exact payload contract.
+    ``stream=True`` consumes the SSE response and populates ttft_s +
+    content_chunk_offsets_ms + content_chunk_count. Mutually exclusive
+    with ``enable_audio=True`` (different response shape).
 
-    ``stream=True`` enables per-content-chunk SSE consumption and
-    populates ``ttft_s`` / ``content_chunk_offsets_ms`` /
-    ``content_chunk_count`` on the result. Streaming is incompatible
-    with ``enable_audio=True`` because the audio-output path does not
-    use the same SSE shape; callers must pick one or the other.
-
-    Timing semantics: this send_fn populates ``client_wall_time_s`` and
-    sets ``timing_source = "client_wall_time_s"``; aggregate throughput
-    therefore appears under the ``tok_per_s_clientwall_agg`` key in
-    metrics, not ``tok_per_s_engine_agg``.
+    Populates ``client_wall_time_s`` + ``timing_source="client_wall_time_s"``
+    so aggregates land under ``tok_per_s_clientwall_agg``.
     """
     if stream and enable_audio:
         raise ValueError(
@@ -493,11 +454,6 @@ def make_mmmu_send_fn(
         start_time = time.perf_counter()
         try:
             if stream:
-                # Streaming-mode SSE: the response body never returns as a
-                # single JSON; we consume frames as they arrive.
-                if not stream:
-                    raise RuntimeError("unreachable")
-                # Reset text to empty so consume_sse_stream concatenates from scratch.
                 result.text = ""
                 async with session.post(api_url, json=payload) as response:
                     response.raise_for_status()
@@ -565,9 +521,8 @@ def build_mmmu_result_records(
 ) -> list[MMMURecord]:
     """Parse responses into persisted per-sample records.
 
-    ``lane`` is stamped into each record so a downstream report generator can
-    reject mixed Lane A / Lane B inputs at the record layer without depending
-    only on the file-level ``run_metadata.lane`` field.
+    ``lane`` is stamped onto each record so the report generator can reject
+    mixed-lane inputs at the record layer (not just file-level metadata).
     """
     assert len(samples) == len(
         results

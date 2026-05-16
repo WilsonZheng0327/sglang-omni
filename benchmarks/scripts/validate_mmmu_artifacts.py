@@ -77,14 +77,7 @@ def _load_jsonl(path: Path) -> list[dict]:
 def _validate_launch_command(
     preflight: dict, container_name: str, row_label: str
 ) -> list[str]:
-    """Assert the retained preflight has a launch_command with required flags.
-
-    The plan requires `prefix_cache_disabled` / `mem_fraction_static_configured`
-    to be provable from launch evidence. The validator enforces that the
-    retained preflight JSON contains, for each cell's container, a
-    `launch_command` that includes ``--disable-radix-cache`` and a
-    numeric ``--mem-fraction-static <X>``.
-    """
+    """Require launch_command tokens to include ``--disable-radix-cache`` and a numeric ``--mem-fraction-static <X>``."""
     issues: list[str] = []
     containers = (preflight.get("containers") or {}) if preflight else {}
     container_record = containers.get(container_name) or {}
@@ -138,10 +131,7 @@ def _validate_status_row(row: dict) -> list[str]:
         if not (cell_dir / fname).exists():
             issues.append(f"{row_label}: missing {fname} in {cell_dir}")
 
-    # Failure-log surfacing: every status row must declare a failure_log_path
-    # so a downstream reporter can point at the stderr capture; failed-status
-    # rows additionally require the value to be non-empty so silently-dropped
-    # failures get caught at the contract layer.
+    # Every row must declare failure_log_path; failed-status rows must have it non-empty.
     if "failure_log_path" not in row:
         issues.append(
             f"{row_label}: status row is missing 'failure_log_path' key; the "
@@ -173,8 +163,7 @@ def _validate_status_row(row: dict) -> list[str]:
             issues.append(f"{row_label}: run_metadata missing key {key!r}")
 
     if row.get("status") == "success":
-        # Successful rows must have the live metadata fields. Failed rows preserve
-        # whatever partial state they captured but are not required to.
+        # Live fields enforced only on success rows; failed rows keep partial state.
         for key in LIVE_REQUIRED:
             value = meta.get(key)
             if value is None or value == [] or value == {}:
@@ -222,9 +211,6 @@ def _validate_status_row(row: dict) -> list[str]:
                     f"failed-rep accounting contract is broken"
                 )
 
-    # Launch-evidence enforcement: open the cell's retained preflight.json
-    # and require launch_command + the contracted policy flags for the
-    # container that actually served this cell.
     if row.get("status") == "success":
         preflight_path = cell_dir / "preflight.json"
         if preflight_path.exists():
@@ -250,13 +236,7 @@ def _validate_status_row(row: dict) -> list[str]:
 
 
 def _find_duplicate_rep_tuples(status_rows: list[dict]) -> list[str]:
-    """Reject duplicate ``(host, backend, lane, rep)`` rows.
-
-    Two status rows that share the same dispatch tuple indicate either a
-    silently-retried rep that overwrote its predecessor's evidence or a
-    bookkeeping bug that double-counted a single rep. Either way, the
-    bundle is unsafe for downstream reporting.
-    """
+    """Reject duplicate ``(host, backend, lane, rep)`` rows (silent-retry hazard)."""
     seen: dict[tuple, int] = {}
     issues: list[str] = []
     for idx, row in enumerate(status_rows):

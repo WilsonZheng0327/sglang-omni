@@ -89,9 +89,8 @@ from benchmarks.dataset.mmmu import load_mmmu_samples
 from benchmarks.metrics.mmmu import compute_mmmu_metrics, print_mmmu_accuracy_summary
 from benchmarks.metrics.performance import compute_speed_metrics, print_speed_summary
 from benchmarks.metrics.wer import print_wer_summary
-# compute_text_audio_consistency is only needed when --enable-audio is set;
-# imported lazily because benchmarks.tasks.tts pulls in heavy audio deps
-# (soundfile, jiwer, etc.) that are not installed in lightweight dev envs.
+# compute_text_audio_consistency is imported lazily inside the --enable-audio
+# branch because benchmarks.tasks.tts pulls in soundfile/jiwer.
 from benchmarks.tasks.visual_understand import (
     build_mmmu_result_records,
     make_mmmu_send_fn,
@@ -124,43 +123,24 @@ class MMMUEvalConfig:
     repo_id: str | None = None
     prompt_override: str | None = None
     timeout_s: int = 300
-    # Authoritative metadata sources: when --preflight-json is provided,
-    # the eval merges model_revision + container_image_digest from the
-    # gate's output rather than computing placeholders. When --launcher-log
-    # is provided, kv_cache_capacity_tokens is scraped from it.
-    # mem_fraction_static and prefix_cache_disabled come straight from the
-    # launch flags the operator used (and are cross-checked against the
-    # retained launch command).
+    # Evidence-based metadata sources: preflight.json supplies model_revision
+    # + container digest; launcher.log supplies kv_cache_capacity_tokens; the
+    # two policy flags below are cross-checked against the retained launch_command.
     preflight_json: str | None = None
     launcher_log: str | None = None
     mem_fraction_static: float | None = None
     prefix_cache_disabled: bool = True
-    # Backend dispatch: "omni" uses the sglang-omni top-level images field;
-    # "sglang" uses OpenAI-style messages[].content with image_url parts.
-    # See benchmarks/tasks/visual_understand.py:build_mmmu_payload.
+    # "omni" → top-level images field; "sglang" → OAI messages[].content with image_url.
     backend: str = "omni"
-    # Streaming: when True, send_fn consumes the SSE response and populates
-    # TTFT / inter-content-chunk metrics. Incompatible with enable_audio.
+    # When True, consume SSE response and populate TTFT + inter-chunk metrics.
     stream: bool = False
-    # Reproducibility knobs. seed forwards to the upstream SGLang sampler
-    # via SamplingParams.sampling_seed. ignore_eos forces decoding to
-    # continue until max_tokens (Lane B in the #379 sweep).
     seed: int | None = 42
     ignore_eos: bool = False
-    # Lane: "A" = natural EOS with default max_tokens, "B" = ignore_eos with
-    # max_tokens=256 for decode-throughput parity. Setting lane B implies
-    # ignore_eos=True and max_tokens=256 unless the caller overrides them.
+    # "A" = natural EOS + default max_tokens; "B" forces ignore_eos + max_tokens=256.
     lane: str = "A"
-    # Per-host bookkeeping for the sweep script. reps is the number of
-    # paired repetitions the orchestrator runs per cell; this CLI runs one
-    # sweep per invocation, so reps lives in the metadata block (not in
-    # the eval loop itself). repetition_index identifies the current run
-    # within the paired-rep cycle.
     reps: int = 3
     repetition_index: int = 0
-    # Per-repo dataset revision pinning. None = use the default JSON file at
-    # benchmarks/dataset/mmmu_revisions.json. Override for tests or to point
-    # at an alternate revision-pin file.
+    # None = use benchmarks/dataset/mmmu_revisions.json.
     dataset_revisions: str | None = None
 
 
@@ -179,14 +159,7 @@ def _load_preflight_merge(preflight_json: str | None) -> dict:
 
 
 class LaunchPolicyMismatch(RuntimeError):
-    """Raised when the eval's declared policy disagrees with preflight evidence.
-
-    The plan requires `prefix_cache_disabled` and `mem_fraction_static_configured`
-    to be provable from the actual server launch command, not declared by the
-    eval CLI. When preflight retained a `launch_command` and that command's
-    flags disagree with the CLI policy, we fail-fast at result construction
-    rather than letting the artifact self-assert an unverifiable policy.
-    """
+    """Eval's declared policy disagrees with the preflight launch_command evidence."""
 
 
 def _derive_launch_policy_from_preflight(
@@ -195,23 +168,11 @@ def _derive_launch_policy_from_preflight(
     *,
     preflight_supplied: bool = False,
 ) -> tuple[float | None, bool, bool]:
-    """Parse the retained `launch_command` and derive evidence-based policy.
+    """Parse retained ``launch_command`` and return ``(mem_fraction, prefix_cache_disabled, claimed_unverified)``.
 
-    Returns ``(mem_fraction_evidence, prefix_cache_disabled_evidence,
-    claimed_unverified)``.
-
-    - ``claimed_unverified`` is ``True`` when preflight had no launch_command
-      for this container (the eval's declared values are echoed back but
-      cannot be verified against launch evidence).
-    - When launch_command IS present, the returned tuple's first two
-      elements come straight from the command flags.
-    - When launch_command is present but disagrees with the eval CLI
-      declarations, raises ``LaunchPolicyMismatch``.
-    - When ``preflight_supplied=True`` AND the preflight record is missing
-      ``launch_command`` for this container, raises ``LaunchPolicyMismatch``.
-      This closes the "evidence dropped silently" failure mode: if the
-      operator pointed the eval at a preflight JSON, they get a hard error
-      when that JSON cannot prove the launch policy.
+    Raises ``LaunchPolicyMismatch`` when launch_command flags disagree with
+    declared values, or when ``preflight_supplied=True`` but launch_command
+    is missing (closes the evidence-dropped-silently failure mode).
     """
     containers = (preflight.get("containers") or {}) if preflight else {}
     container_record = containers.get(container_name) or {}
@@ -338,14 +299,8 @@ def _build_run_metadata(
         preflight_containers.get(container_name, {}).get("container_image_digest")
     )
     if container_digest is None:
-        # Fall back to live docker inspect if preflight didn't capture it.
         container_digest = get_container_image_digest(container_name)
 
-    # Launch policy: derive from preflight's retained launch_command rather
-    # than echoing the eval CLI. This raises LaunchPolicyMismatch when the
-    # CLI claims a policy the launch command did not enforce, and also when
-    # --preflight-json was supplied but the retained record dropped
-    # launch_command (closing the evidence-loss failure mode).
     (
         mem_fraction_evidence,
         prefix_cache_disabled_evidence,
@@ -366,9 +321,7 @@ def _build_run_metadata(
         kv_capacity = None
 
     if steady_state_gpu_gb is None:
-        # Caller did not pre-sample; fall back to right-now sample. The
-        # sweep runner calls ``_build_run_metadata`` with the post-warmup
-        # value to satisfy the "warmup+30s" steady-state sampling contract.
+        # Caller didn't pre-sample at warmup+30s; fall back to a right-now sample.
         steady_state_gpu_gb = sample_gpu_memory_used_gb()
 
     failure_count = 0
@@ -484,9 +437,7 @@ async def run_mmmu_eval(config: MMMUEvalConfig) -> dict:
     request_results = await runner.run(
         samples, send_fn, post_warmup_hook=_start_sampler_post_warmup
     )
-    # Make sure the post-warmup sample has had a chance to run before we
-    # build the metadata block. join() returns immediately if the thread
-    # already finished (typical case: the sweep itself runs longer than 30s).
+    # Wait for the warmup+30s GPU sample before building run_metadata.
     if sampler_thread_holder["thread"] is not None:
         sampler_thread_holder["thread"].join(timeout=35)
 
@@ -541,13 +492,10 @@ async def run_mmmu_eval(config: MMMUEvalConfig) -> dict:
 
 
 def _config_from_args(args: argparse.Namespace) -> MMMUEvalConfig:
-    """Resolve a MMMUEvalConfig from argparse args, enforcing lane contracts.
+    """Resolve MMMUEvalConfig from argparse, enforcing lane contracts.
 
-    Lane A: natural EOS; max_tokens defaults to 2048 (user may override).
-    Lane B: fixed-length decode-throughput parity. ignore_eos=True and
-    max_tokens=256 are NON-NEGOTIABLE — explicit overrides are rejected
-    so the comparison stays apples-to-apples. This locks the lane-B
-    contract that fixed-length decode parity is config-only, not a default.
+    Lane A: natural EOS; max_tokens defaults to 2048 (overridable).
+    Lane B: ignore_eos=True + max_tokens=256, both NON-NEGOTIABLE (overrides rejected).
     """
     lane = args.lane.upper()
     if lane == "B":

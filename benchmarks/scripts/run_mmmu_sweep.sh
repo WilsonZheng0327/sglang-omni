@@ -2,40 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Orchestrate the paired-rep MMMU sweep across both lanes and both backends.
-#
-# Layout:
-#   Lane A: natural EOS, max_tokens=2048 (client-visible latency)
-#   Lane B: ignore_eos=True, max_tokens=256 (decode-throughput parity)
-#
-# Per-host topology:
-#   One H200 host (ion8-omni or ion9-omni) runs a pair of named containers:
-#     - sglang-omni-hayden-benchmark (image frankleeeee/sglang-omni:dev)
-#       hosting sgl-omni serve --text-only --disable-radix-cache
-#                   --mem-fraction-static <X> on port 30000
-#     - sglang-hayden-benchmark (image lmsysorg/sglang:dev)
-#       hosting python -m sglang.launch_server --disable-radix-cache
-#                   --mem-fraction-static <X> on port 30001
-#   Preflight runs ON the host (over SSH from the orchestrator) so all of
-#   the readiness probes, docker inspect calls, and launcher-log greps
-#   happen on the same machine that issued the docker run.
-#
-# Modes:
-#   parallel-by-lane (default): ion8-omni runs Lane A, ion9-omni runs Lane B
-#     in parallel (~1.5 GPU-h for 3 reps).
-#   serial single-host (--serial): both lanes on the same host (~3 GPU-h).
-#
-# Authoritative metadata threading: each cell's benchmark_omni_mmmu invocation
-# receives --preflight-json, --launcher-log, --mem-fraction-static so the
-# resulting mmmu_results.json carries real model_revision, container
-# digest, KV capacity, mem-fraction, and prefix-cache policy. After the
-# remote run, scp pulls mmmu_results.json AND the host's preflight.json
-# AND the cell's launcher.log back into the local cell_dir. The status
-# JSONL row's container_image_digest is sourced from the retained
-# run_metadata block, not from an orchestrator-local docker inspect (which
-# would return the wrong digest in parallel-by-lane mode).
-#
-# Failure policy: each rep's success/failure is appended to
-# <out>/sweep-status.jsonl. Failed reps are NOT silently retried.
+# Per-host: one omni + one sglang container. Preflight runs ON each host over
+# SSH so readiness probes / docker inspect / launcher-log greps see the same
+# machine that issued the docker run. Modes: parallel-by-lane (default;
+# ~1.5 GPU-h for 3 reps) or --serial single-host (~3 GPU-h). Each cell threads
+# --preflight-json / --launcher-log / --mem-fraction-static so the retained
+# mmmu_results.json carries real model_revision + digest + KV capacity. Failed
+# reps go in <out>/sweep-status.jsonl and are NOT silently retried.
 
 set -euo pipefail
 
@@ -141,9 +114,8 @@ preflight_on_host() {
 }
 
 if [[ "$SKIP_PREFLIGHT" -eq 0 ]]; then
-    # Always preflight each host that will run cells. Even in serial mode the
-    # single chosen host needs --launch + log capture before any benchmark
-    # traffic; otherwise the launcher-log verification has no log to read.
+    # Preflight every host that will run cells (serial mode still needs the
+    # one host preflighted so launcher-log verification has a log to read).
     PREFLIGHT_HOSTS=()
     if [[ "$SERIAL" -eq 0 ]] && [[ "$LANES" == "both" ]]; then
         PREFLIGHT_HOSTS+=("$HOST_LANE_A" "$HOST_LANE_B")
@@ -176,8 +148,7 @@ run_cell() {
         container_image="lmsysorg/sglang:dev"
     fi
 
-    # All metadata-source flags are threaded into the eval. Paths refer to the
-    # host's filesystem (preflight wrote them there).
+    # Thread metadata-source flags; paths refer to the host's filesystem.
     local cmd=(
         python -m benchmarks.eval.benchmark_omni_mmmu
         --base-url "http://localhost:$port"
@@ -218,19 +189,16 @@ run_cell() {
         if ! ssh "$host" "cd $REMOTE_REPO_ROOT && ${cmd[*]}" 2> "$stderr_log"; then
             status=failed
         fi
-        # Copy back the result JSON, plus preflight + launcher log so the
-        # retained bundle is self-contained and the run-metadata in the
-        # JSON can be cross-checked against its source files.
+        # Pull back result + preflight + launcher log so the retained bundle
+        # is self-contained for downstream cross-checks.
         scp -q -r "${host}:${remote_dir}/." "${cell_dir}/" 2>>"$stderr_log" || true
         scp -q "${host}:${PREFLIGHT_REMOTE}" "${cell_dir}/preflight.json" 2>>"$stderr_log" || true
         scp -q "${host}:${launcher_log}" "${cell_dir}/launcher.log" 2>>"$stderr_log" || true
         ssh "$host" "rm -rf $remote_dir" 2>/dev/null || true
     fi
 
-    # Source container digest + failure count from the cell's run_metadata
-    # block rather than orchestrator-local docker inspect — that local
-    # inspect would return the WRONG digest in parallel-by-lane mode where
-    # the orchestrator's docker is not the host that ran the cell.
+    # Read digest + failure_count from the cell's run_metadata, not from
+    # local docker inspect (which returns the wrong digest in parallel-by-lane).
     local container_digest="" failure_count=0
     if [[ -f "${cell_dir}/mmmu_results.json" ]]; then
         container_digest="$(python -c "import json; d=json.load(open('${cell_dir}/mmmu_results.json'));m=d.get('run_metadata',{});print(m.get('container_image_digest') or '')" 2>/dev/null || true)"

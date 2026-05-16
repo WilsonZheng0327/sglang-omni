@@ -2,19 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Single report-generation entry point for an MMMU sweep bundle.
 
-The original plan's AC-10 Negative Test specifies that mixing Lane A and
-Lane B per-sample records in the same input file must be rejected by the
-report generator with a clear error. This module owns that guard and
-exposes it as both a library function (``assert_single_lane``) and a
-CLI.
-
-The report generator is intentionally narrow: it reads retained
-``mmmu_results.json`` cells, asserts that the per-sample records all
-carry the same lane (and that the file-level ``run_metadata.lane``
-agrees), and surfaces the loaded records to the caller. Anything more
-elaborate (accuracy tables, latency tables, the issue #379 follow-up
-comment body) is intentionally caller-driven so the strictly-required
-plan obligation lives in a tiny, testable surface.
+Owns the mixed-lane guard: reads retained ``mmmu_results.json`` cells and
+rejects payloads where per-sample records (or run_metadata) span more than
+one lane. Caller-driven beyond that — no accuracy/latency tables.
 """
 
 from __future__ import annotations
@@ -27,25 +17,11 @@ from typing import Iterable
 
 
 class MixedLaneError(ValueError):
-    """Raised when per-sample MMMU records span more than one lane.
-
-    Tracks the offending lanes and the first conflicting record so the
-    error message can name what went wrong without dumping the full
-    payload.
-    """
+    """Per-sample MMMU records span more than one lane."""
 
 
 def assert_single_lane(records: Iterable[dict]) -> str:
-    """Assert that every per-sample record carries the same lane label.
-
-    Returns the (single) lane string when records are consistent. Raises
-    ``MixedLaneError`` when records carry more than one distinct lane,
-    or when any record is missing the ``lane`` field entirely.
-
-    The check is on the record layer, not the file-level metadata, so
-    even a hand-merged file containing per-sample records from two
-    different lanes is rejected.
-    """
+    """Return the single lane these records carry; raise ``MixedLaneError`` on mix or missing field."""
     records = list(records)
     if not records:
         raise MixedLaneError(
@@ -72,11 +48,7 @@ def assert_single_lane(records: Iterable[dict]) -> str:
 
 
 def load_cell(result_path: Path) -> tuple[str, list[dict]]:
-    """Load a retained ``mmmu_results.json`` and return ``(lane, per_sample)``.
-
-    Cross-checks ``run_metadata.lane`` against the per-sample lane labels.
-    Raises ``MixedLaneError`` if either layer is inconsistent.
-    """
+    """Load a retained ``mmmu_results.json``, cross-check lane between metadata and per_sample, return ``(lane, per_sample)``."""
     data = json.loads(result_path.read_text())
     meta_lane = (data.get("run_metadata") or {}).get("lane")
     per_sample = data.get("per_sample") or []
