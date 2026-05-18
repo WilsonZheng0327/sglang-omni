@@ -64,6 +64,10 @@ def build_sglang_higgs_request(
     if state.seed is not None:
         sp_kwargs["seed"] = int(state.seed)
     sampling_params = SamplingParams(**sp_kwargs)
+    # tokenizer_manager.normalize() is bypassed in our custom pipeline;
+    # without it stop_strs / stop_regex_strs stay None and the upstream
+    # scheduler's check_finished trips on ``len(None)``.
+    sampling_params.normalize(tokenizer=None)
 
     # vocab_size = backbone text vocab so cb0 rides sglang's standard sampler path.
     # extra_key namespaces the radix cache per ref-audio fingerprint so prompts
