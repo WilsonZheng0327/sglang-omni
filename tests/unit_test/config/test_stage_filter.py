@@ -11,6 +11,10 @@ from __future__ import annotations
 import pytest
 
 from sglang_omni.config import PipelineConfig, StageConfig
+from sglang_omni.models.qwen3_omni.config import (
+    Qwen3OmniPipelineConfig,
+    Qwen3OmniSpeechPipelineConfig,
+)
 
 _FACTORY = "tests.unit_test.config.test_stage_filter._noop_factory"
 
@@ -58,10 +62,12 @@ def _stage(
     return StageConfig(**kwargs)
 
 
-def _pipeline(stages, *, enabled_stages=None) -> PipelineConfig:
+def _pipeline(stages, *, enabled_stages=None, entry_stage=None) -> PipelineConfig:
     kwargs: dict = {"model_path": "fake/model", "stages": stages}
     if enabled_stages is not None:
         kwargs["enabled_stages"] = enabled_stages
+    if entry_stage is not None:
+        kwargs["entry_stage"] = entry_stage
     return PipelineConfig(**kwargs)
 
 
@@ -268,9 +274,10 @@ class TestWaitForFiltering:
             enabled_stages=["a", "merge"],
         )
         merge = next(s for s in p.stages if s.name == "merge")
-        if merge.wait_for is not None:
-            assert "b" not in merge.wait_for
-            assert "a" in merge.wait_for
+        assert merge.wait_for == ["a"]
+        assert (
+            merge.merge_fn == "tests.unit_test.config.test_stage_filter._noop_factory"
+        )
 
 
 class TestStreamToFiltering:
@@ -300,3 +307,27 @@ class TestRequiredEnforcement:
         )
         names = {s.name for s in p.stages}
         assert {"a", "b", "c"} <= names
+
+
+class TestBrokenGraphValidation:
+    def test_qwen_text_filter_rejects_omitted_original_entry(self):
+        with pytest.raises(ValueError, match="entry stage 'preprocessing'"):
+            Qwen3OmniPipelineConfig(
+                model_path="fake/Qwen3-Omni-30B-A3B-Instruct",
+                enabled_stages=["decode"],
+            )
+
+    def test_qwen_speech_filter_rejects_unreachable_retained_terminal(self):
+        with pytest.raises(ValueError, match="unreachable.*code2wav"):
+            Qwen3OmniSpeechPipelineConfig(
+                model_path="fake/Qwen3-Omni-30B-A3B-Instruct",
+                enabled_stages=["preprocessing", "code2wav"],
+            )
+
+    def test_direct_empty_next_list_is_rejected(self):
+        with pytest.raises(ValueError, match="next.*empty"):
+            _stage("a", next_=[])
+
+    def test_empty_next_fallback_list_is_rejected(self):
+        with pytest.raises(ValueError, match="next_fallback.*empty"):
+            _stage("a", next_="b", next_fallback=[])

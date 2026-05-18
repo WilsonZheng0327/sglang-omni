@@ -86,15 +86,24 @@ def build_lightweight_mm_inputs(mm_inputs: dict[str, Any]) -> dict[str, Any]:
 def project_preprocessing_to_thinker_textonly(payload: StagePayload) -> StagePayload:
     """Project preprocessing → thinker directly, bypassing encoders + aggregate.
 
-    Used as preprocessing.project_payload_fallback["thinker"] when
-    image_encoder / audio_encoder / mm_aggregate are pruned by an
-    enabled_stages whitelist. Logically equivalent to calling
-    merge_for_thinker({"preprocessing": payload}) — for text-only requests
-    the encoder_outs dict is empty, so the merge collapses to a
-    preprocessing-state pass-through with thinker_inputs populated.
+    Used only when enabled_stages prunes the multimodal encoder path. Reject
+    real image/video/audio work here so media requests fail before thinker
+    receives placeholder metadata without encoder embeddings.
     """
     from sglang_omni.models.qwen3_omni.merge import merge_for_thinker
 
+    state = PipelineState.from_dict(payload.data)
+    blocked = [
+        stage_name
+        for stage_name in (IMAGE_STAGE, AUDIO_STAGE)
+        if _has_real_encoder_work(state.encoder_inputs.get(stage_name))
+    ]
+    if blocked:
+        raise ValueError(
+            "Qwen3-Omni text-minimal enabled_stages can only serve text-only "
+            f"requests; preprocessing produced media encoder work for {blocked}. "
+            "Use the full multimodal pipeline or remove media inputs."
+        )
     return merge_for_thinker({"preprocessing": payload})
 
 
@@ -156,6 +165,14 @@ def _select_encoder_inputs(
     if not isinstance(stage_inputs, dict):
         return {}
     return {stage_name: dict(stage_inputs)}
+
+
+def _has_real_encoder_work(stage_inputs: Any) -> bool:
+    return (
+        isinstance(stage_inputs, dict)
+        and bool(stage_inputs)
+        and not stage_inputs.get("_skip")
+    )
 
 
 def _project_encoder_input_metadata(

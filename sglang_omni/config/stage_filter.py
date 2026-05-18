@@ -1,16 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Whitelist-based stage selection for pipeline configs.
-
-Given a list of StageConfig and a whitelist of stage names, return a new list
-containing only the whitelisted stages (plus any stage with required=True),
-with all cross-stage edges (next, wait_for, stream_to, project_payload)
-rewired to reference only stages still in the effective set.
-
-A stage whose `next` would become empty after pruning falls back to its
-declared `next_fallback` (with `project_payload_fallback` swapped in). If no
-fallback is declared, a ValueError is raised naming the offending stage and
-edge so the caller can fix either the whitelist or the model declaration.
-"""
+"""Whitelist-based stage selection for pipeline configs."""
 
 from __future__ import annotations
 
@@ -29,15 +18,16 @@ def _as_list(value: str | list[str] | None) -> list[str]:
 
 
 def _apply_stage_filter(
-    stages: "list[StageConfig]", enabled_stages: list[str]
+    stages: "list[StageConfig]",
+    enabled_stages: list[str],
+    *,
+    entry_stage: str | None,
 ) -> "list[StageConfig]":
     """Return a new stage list filtered by the whitelist.
 
-    Required stages (StageConfig.required=True) are auto-included regardless
-    of whether the caller listed them. Edges are pruned and rewired according
-    to per-stage fallback declarations. Raises ValueError with an actionable
-    message if a stage's outbound edge collapses with no fallback available
-    or if the caller named a stage that does not exist.
+    Required stages are auto-included. Edges are pruned or rewired with
+    per-stage fallbacks, then the retained graph must remain reachable from
+    the original resolved entry stage.
     """
     all_names = {s.name for s in stages}
     requested = set(enabled_stages)
@@ -51,12 +41,21 @@ def _apply_stage_filter(
 
     auto_included = {s.name for s in stages if s.required}
     effective = requested | auto_included
+    if entry_stage is not None and entry_stage not in all_names:
+        raise ValueError(f"entry_stage {entry_stage!r} is not defined")
+    if entry_stage is not None and entry_stage not in effective:
+        raise ValueError(
+            f"enabled_stages must retain entry stage {entry_stage!r}. "
+            f"Add {entry_stage!r} to enabled_stages or set entry_stage to a "
+            f"retained stage that can safely accept new requests."
+        )
 
     result: list[StageConfig] = []
     for stage in stages:
         if stage.name not in effective:
             continue
         result.append(_rewire_stage(stage, effective))
+    _validate_reachable_from_entry(result, entry_stage=entry_stage)
     return result
 
 
@@ -83,6 +82,8 @@ def _rewire_stage(stage: "StageConfig", effective: set[str]) -> "StageConfig":
     # Prune next; apply fallback if it fully collapses
     if stage.next is not None:
         targets = _as_list(stage.next)
+        if not targets:
+            raise ValueError(f"Stage {stage.name!r}: next must not be empty")
         kept_next = [t for t in targets if t in effective]
 
         if kept_next:
@@ -107,6 +108,10 @@ def _rewire_stage(stage: "StageConfig", effective: set[str]) -> "StageConfig":
                     f"stage so the framework can rewire the DAG."
                 )
             fallback_targets = _as_list(stage.next_fallback)
+            if not fallback_targets:
+                raise ValueError(
+                    f"Stage {stage.name!r}: next_fallback must not be empty"
+                )
             missing_fb = [t for t in fallback_targets if t not in effective]
             if missing_fb:
                 raise ValueError(
@@ -128,3 +133,40 @@ def _rewire_stage(stage: "StageConfig", effective: set[str]) -> "StageConfig":
     if not updates:
         return stage
     return stage.model_copy(update=updates)
+
+
+def _validate_reachable_from_entry(
+    stages: "list[StageConfig]",
+    *,
+    entry_stage: str | None,
+) -> None:
+    if entry_stage is None or not stages:
+        return
+
+    by_name = {stage.name: stage for stage in stages}
+    if entry_stage not in by_name:
+        raise ValueError(
+            f"enabled_stages must retain entry stage {entry_stage!r}. "
+            f"Retained stages: {sorted(by_name)}."
+        )
+
+    reachable: set[str] = set()
+    stack = [entry_stage]
+    while stack:
+        name = stack.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        stage = by_name[name]
+        for target in _as_list(stage.next):
+            if target in by_name and target not in reachable:
+                stack.append(target)
+
+    unreachable = sorted(set(by_name) - reachable)
+    if unreachable:
+        terminals = sorted(stage.name for stage in stages if stage.terminal)
+        raise ValueError(
+            f"enabled_stages leaves unreachable retained stages from entry "
+            f"{entry_stage!r}: {unreachable}. Retained terminal stages: "
+            f"{terminals}."
+        )

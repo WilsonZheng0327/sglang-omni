@@ -28,10 +28,14 @@ stages = [
         process="preprocessing",
         factory="...create_preprocessing_executor",
         next=["image_encoder", "audio_encoder", "mm_aggregate"],
+        next_fallback="thinker",
         project_payload={
             "image_encoder": "...project_preprocessing_to_image_encoder",
             "audio_encoder": "...project_preprocessing_to_audio_encoder",
             "mm_aggregate": "...project_preprocessing_to_mm_aggregate",
+        },
+        project_payload_fallback={
+            "thinker": "...project_preprocessing_to_thinker_textonly",
         },
     ),
     StageConfig(
@@ -50,6 +54,7 @@ stages = [
         gpu=0,
         next=["decode", "talker_ar"],
         stream_to=["talker_ar"],
+        required=True,
     ),
     StageConfig(
         name="decode",
@@ -83,6 +88,9 @@ stages = [
 | `merge_fn` | `str` or `None` | `None` | Dotted import path to the fan-in merge function. Required when `wait_for` is set. |
 | `stream_to` | `list[str]` | `[]` | Streaming targets for chunks such as hidden states or codec codes. This is parallel to normal result routing. |
 | `project_payload` | `dict[str, str]` | `{}` | Optional target-stage to dotted projection function mapping used before writing a downstream payload. |
+| `required` | `bool` | `False` | Auto-includes the stage when `PipelineConfig.enabled_stages` is set. Use for stages the pipeline cannot safely exclude, such as the thinker or decode sink. |
+| `next_fallback` | `str`, `list[str]`, or `None` | `None` | Replacement downstream route used when `enabled_stages` prunes every normal `next` target. Empty lists are invalid. |
+| `project_payload_fallback` | `dict[str, str]` | `{}` | Projection mapping used with `next_fallback`, replacing `project_payload` for the rewired route. |
 | `relay` | `RelayConfig` or `None` | `None` | Per-stage relay override. If unset, relay device and defaults are inferred from stage placement and `PipelineConfig.relay_backend`. |
 
 Routing rule: in current code, use `next` for static downstream routing or
@@ -115,12 +123,17 @@ Derived from stages:
 | `completion_endpoint` | `str` or `None` | `None` | Optional explicit coordinator completion endpoint. |
 | `abort_endpoint` | `str` or `None` | `None` | Optional explicit coordinator abort broadcast endpoint. |
 | `config_cls` | `str` or `None` | class name | Stored automatically and used when loading a saved config file. |
+| `enabled_stages` | `list[str]` or `None` | `None` | Optional whitelist that prunes stages before runtime prep. Required stages are auto-included; the original entry stage must remain active; retained stages must stay reachable from that entry. |
 
 Derived values are computed from stages, not manually maintained:
 
 - `resolved_entry_stage`: `entry_stage` if set, otherwise the first stage name
 - `terminal_stages`: all stages with `terminal=True`
 - `gpu_placement`: stage name to GPU id or TP GPU list for stages with `gpu`
+
+When `enabled_stages` is set, filtering happens during config validation:
+unknown stage names, empty `next`/`next_fallback` routes, omitted entry stages,
+and unreachable retained stages are rejected before the runner starts.
 
 `RelayConfig` is the per-stage data-transfer override. It currently contains
 `slot_size_mb`, `credits`, `rank`, `world_size`, and `device`.

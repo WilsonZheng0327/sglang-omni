@@ -18,6 +18,8 @@ tests/
     │   ├── fish_fakes.py
     │   ├── pipeline_fakes.py
     │   └── qwen_fakes.py
+    ├── config/
+    │   └── test_stage_filter.py
     ├── pipeline/
     │   ├── helpers.py
     │   ├── test_compile.py
@@ -173,6 +175,9 @@ that happened to contain an older version of the test.
   - scheduler concurrency
   - scheduler callable contracts, including sync wrappers and callable objects
     that return awaitables.
+- `unit_test/config/`: Declarative config schema and compile-time topology
+  tests, including `enabled_stages` filtering, fallback rewiring, and broken-DAG
+  rejection.
 - `unit_test/qwen3_omni/` Qwen3-Omni unit tests:
 
   - public CLI/config behavior

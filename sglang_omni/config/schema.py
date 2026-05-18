@@ -173,15 +173,10 @@ class StageConfig(BaseModel):
     # --- Route-specific payload projection ---
     project_payload: dict[str, str] = Field(default_factory=dict)
 
-    # --- Stage-selection metadata (consumed by PipelineConfig.enabled_stages) ---
-    # required=True means the stage cannot be excluded by an enabled_stages
-    # whitelist; the framework auto-includes it. Typical use: AR LM thinker,
-    # terminal decode — stages without which the pipeline is meaningless.
+    # --- Stage-selection metadata ---
+    # Auto-include this stage when PipelineConfig.enabled_stages is set.
     required: bool = False
-    # next_fallback is used when every entry in `next` is filtered out by a
-    # whitelist. The stage author declares this so the framework can rewire
-    # the DAG instead of failing the compile. Pair with project_payload_fallback
-    # to keep payload projections consistent with the new routing.
+    # Replacement route/projections when enabled_stages prunes all `next` targets.
     next_fallback: str | list[str] | None = None
     project_payload_fallback: dict[str, str] = Field(default_factory=dict)
 
@@ -194,6 +189,12 @@ class StageConfig(BaseModel):
         parallelism_set = "parallelism" in fields_set
         if self.tp_size < 1:
             raise ValueError(f"Stage {self.name!r} must have tp_size >= 1")
+        if isinstance(self.next, list) and not self.next:
+            raise ValueError(f"Stage {self.name!r} next must not be an empty list")
+        if isinstance(self.next_fallback, list) and not self.next_fallback:
+            raise ValueError(
+                f"Stage {self.name!r} next_fallback must not be an empty list"
+            )
         if self.process is not None:
             self.process = self.process.strip()
             if not self.process:
@@ -229,15 +230,19 @@ class PipelineConfig(BaseModel):
     completion_endpoint: str | None = None
     abort_endpoint: str | None = None
     config_cls: str | None = None
-    # When set, only stages named here (plus any stage with required=True) are
-    # active; all other stages are pruned from the DAG and edges are rewritten
-    # via per-stage next_fallback / project_payload_fallback declarations.
-    # None means "all stages active" (back-compat).
+    # Optional stage whitelist; required stages are auto-included.
     enabled_stages: list[str] | None = None
 
     def model_post_init(self, __context: Any = None) -> None:
+        original_entry = self.entry_stage or (
+            self.stages[0].name if self.stages else None
+        )
         if self.enabled_stages is not None:
-            self.stages = _apply_stage_filter(self.stages, self.enabled_stages)
+            self.stages = _apply_stage_filter(
+                self.stages,
+                self.enabled_stages,
+                entry_stage=original_entry,
+            )
         self._validate_general()
         self._validate_fusion()
         self.config_cls = self.__class__.__name__

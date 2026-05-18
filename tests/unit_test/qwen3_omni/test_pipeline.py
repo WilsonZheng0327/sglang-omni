@@ -25,6 +25,7 @@ from sglang_omni.models.qwen3_omni.payload_types import PipelineState
 from sglang_omni.models.qwen3_omni.request_builders import (
     build_sglang_thinker_request,
     project_preprocessing_to_mm_aggregate,
+    project_preprocessing_to_thinker_textonly,
 )
 from sglang_omni.scheduling.sglang_backend.server_args_builder import (
     apply_encoder_mem_reserve,
@@ -521,6 +522,27 @@ def test_qwen_mm_aggregate_keeps_lightweight_inputs_and_prunes_after_merge() -> 
         "video": "video:image-cache",
         "audio": "audio:audio-cache",
     }
+
+
+def test_qwen_textonly_fallback_rejects_real_media_encoder_work() -> None:
+    state = make_qwen_state(
+        encoder_inputs={"image_encoder": {"cache_key": "image-cache"}}
+    )
+
+    with pytest.raises(ValueError, match="text-only.*image_encoder"):
+        project_preprocessing_to_thinker_textonly(make_qwen_payload(state))
+
+
+def test_qwen_textonly_fallback_allows_skip_encoder_work() -> None:
+    state = make_qwen_state(
+        encoder_inputs={"image_encoder": {"_skip": True, "_result": {}}}
+    )
+
+    projected = project_preprocessing_to_thinker_textonly(make_qwen_payload(state))
+
+    projected_state = PipelineState.from_dict(projected.data)
+    assert projected_state.encoder_inputs == {}
+    assert "model_inputs" in projected_state.thinker_inputs
 
 
 def test_qwen_thinker_request_and_decode_contracts() -> None:
