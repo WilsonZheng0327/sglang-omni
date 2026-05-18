@@ -103,9 +103,14 @@ def apply_higgs_result(state: HiggsTtsState, data: HiggsSGLangRequestData) -> No
     state.prompt_tokens = len(data.input_ids)
 
 
-def make_higgs_scheduler_adapters(model):
+def make_higgs_scheduler_adapters(model, *, max_new_tokens_cap: int | None = None):
     """Build (request_builder, result_adapter) closures bound to a
     :class:`HiggsTTSModel` instance.
+
+    ``max_new_tokens_cap`` is the server-side hard upper bound applied to
+    each request's ``state.max_new_tokens`` before it reaches sglang's
+    sampler (which uses it for the ``FINISH_LENGTH`` cap). Clients can
+    request less, but never more.
 
     The result adapter drops the model's per-request slot (sampler state +
     accumulated codes) once a result is emitted so a long-running server
@@ -114,6 +119,8 @@ def make_higgs_scheduler_adapters(model):
 
     def request_builder(payload: StagePayload) -> HiggsSGLangRequestData:
         state = HiggsTtsState.from_dict(payload.data)
+        if max_new_tokens_cap is not None:
+            state.max_new_tokens = min(state.max_new_tokens, max_new_tokens_cap)
         data = build_sglang_higgs_request(state, request_id=payload.request_id)
         data.stage_payload = payload
         return data
