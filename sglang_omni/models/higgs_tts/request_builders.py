@@ -25,7 +25,6 @@ class HiggsSGLangRequestData(SGLangARRequestData):
     num_codebooks: int = 8
     codebook_size: int = 1026
     output_codes: list[torch.Tensor] = field(default_factory=list)
-    generation_done: bool = False
 
 
 def _ref_audio_fingerprint(codes: list[list[int]] | None) -> str | None:
@@ -104,7 +103,15 @@ def apply_higgs_result(state: HiggsTtsState, data: HiggsSGLangRequestData) -> No
     state.prompt_tokens = len(data.input_ids)
 
 
-def make_higgs_scheduler_adapters():
+def make_higgs_scheduler_adapters(model):
+    """Build (request_builder, result_adapter) closures bound to a
+    :class:`HiggsTTSModel` instance.
+
+    The result adapter drops the model's per-request slot (sampler state +
+    accumulated codes) once a result is emitted so a long-running server
+    doesn't accumulate dead slots.
+    """
+
     def request_builder(payload: StagePayload) -> HiggsSGLangRequestData:
         state = HiggsTtsState.from_dict(payload.data)
         data = build_sglang_higgs_request(state, request_id=payload.request_id)
@@ -115,6 +122,7 @@ def make_higgs_scheduler_adapters():
         payload = data.stage_payload
         state = HiggsTtsState.from_dict(payload.data)
         apply_higgs_result(state, data)
+        model.reset_request(payload.request_id)
         return StagePayload(
             request_id=payload.request_id,
             request=payload.request,

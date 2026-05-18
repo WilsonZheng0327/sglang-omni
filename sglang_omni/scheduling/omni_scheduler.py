@@ -101,6 +101,7 @@ class OmniScheduler:
         stream_output_builder: Callable | None = None,
         stream_chunk_handler: Callable | None = None,
         stream_done_handler: Callable | None = None,
+        on_abort: Callable[[str], None] | None = None,
         enable_overlap: bool = False,
     ):
         self.inbox: _queue_mod.Queue[IncomingMessage] = _queue_mod.Queue()
@@ -108,6 +109,7 @@ class OmniScheduler:
 
         # --- Request builder: StagePayload → SGLangARRequestData ----------
         self._request_builder = request_builder
+        self._on_abort = on_abort
         self._result_adapter = result_adapter
         self._model_runner = model_runner
         self._stream_output_builder = stream_output_builder
@@ -639,6 +641,8 @@ class OmniScheduler:
         _remove_from_batch(self.cur_batch, request_id)
         _remove_from_batch(self.last_batch, request_id)
         self._drain_inbox_for_request(request_id)
+        if self._on_abort is not None:
+            self._on_abort(request_id)
 
     # ------------------------------------------------------------------
     # Event loops

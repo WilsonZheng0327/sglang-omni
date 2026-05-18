@@ -20,9 +20,11 @@ import logging
 from typing import Any
 
 import torch
+from sglang.srt.managers.schedule_batch import FINISH_MATCHED_TOKEN
 
 from sglang_omni.model_runner.base import ModelRunner
 from sglang_omni.models.higgs_tts.text_tokenizer import AUDIO_PLACEHOLDER_ID
+from sglang_omni.models.higgs_tts.utils import EOC_ID
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +114,11 @@ class HiggsTTSModelRunner(ModelRunner):
                 continue
             codes_N = slot.output_codes[-1]
             data.output_codes.append(codes_N.detach().cpu().clone())
-            data.generation_done = bool(slot.sampler.generation_done)
+            # Sampler-driven finish: EOC + delay wind-down. Set the upstream
+            # finish_reason so OmniScheduler's stream_output picks it up via
+            # ``req.finished()`` and emits the result through result_adapter.
+            if slot.sampler.generation_done and req.finished_reason is None:
+                req.finished_reason = FINISH_MATCHED_TOKEN(EOC_ID)
             cb0_per_row.append(int(codes_N[0].item()))
 
         result.next_token_ids = torch.tensor(
