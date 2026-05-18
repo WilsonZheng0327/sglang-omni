@@ -1285,7 +1285,7 @@ def save_speed_results(
                 "rtf",
                 "prompt_tokens",
                 "completion_tokens",
-                "tok_per_s",
+                "output_token_rate",
                 "is_success",
                 "error",
             ]

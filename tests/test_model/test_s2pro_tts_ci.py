@@ -119,7 +119,7 @@ VC_SIMILARITY_MEAN_MIN = 60.0
 _VC_NON_STREAM_P95 = {
     16: {
         "throughput_qps": 1.433,
-        "tok_per_s_agg": 67.5,
+        "output_tokens_per_request_second": 67.5,
         "latency_mean_s": 9.769,
         "rtf_mean": 3.0009,
     }
@@ -128,7 +128,7 @@ _VC_NON_STREAM_P95 = {
 _VC_STREAM_P95 = {
     16: {
         "throughput_qps": 1.285,
-        "tok_per_s_agg": 60.8,
+        "output_tokens_per_request_second": 60.8,
         "latency_mean_s": 10.289,
         "rtf_mean": 2.8576,
     }
