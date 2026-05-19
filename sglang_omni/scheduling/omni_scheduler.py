@@ -371,31 +371,13 @@ class OmniScheduler:
     def get_next_batch_to_run(self):
         batch = _Upstream.get_next_batch_to_run(self)
         if batch is not None and not self._is_batch_ready_to_run(batch):
-            # Upstream's update_running_batch already called
-            # ``batch.prepare_for_decode()`` on this batch, which allocates a
-            # fresh KV slot per req and bumps kv_committed_len / kv_allocated_len.
-            # Since we are about to skip this tick (e.g. the Qwen3-Omni talker
-            # is waiting on a streamed thinker chunk), nothing will consume
-            # the allocation and ``cache_finished_req`` will never free it —
-            # the idle checker then trips ``token_to_kv_pool_allocator memory
-            # leak detected``. Roll the allocation back so the slot stays
-            # available and the per-req counters keep matching reality.
+            # Upstream already ran prepare_for_decode; undo it so the
+            # allocated KV slot doesn't leak when we skip this tick.
             self._rollback_decode_prep_after_skip(batch)
             return None
         return batch
 
     def _rollback_decode_prep_after_skip(self, batch: Any) -> None:
-        """Undo ``ScheduleBatch.prepare_for_decode`` side effects.
-
-        Only invoked when ``_is_batch_ready_to_run`` rejects a decode batch
-        whose ``prepare_for_decode`` already ran. The opposite of every
-        non-conditional mutation inside ``prepare_for_decode`` for non-spec,
-        non-overlap, non-encoder-decoder scheduling — which is the
-        configuration every OmniScheduler-backed stage runs under (the talker
-        sets ``disable_overlap_schedule=True`` via
-        ``configure_talker_server_args``; other OmniScheduler users inherit
-        the same defaults).
-        """
         if not batch.forward_mode.is_decode():
             return
 
@@ -403,9 +385,6 @@ class OmniScheduler:
             self.token_to_kv_pool_allocator.free(batch.out_cache_loc)
             batch.out_cache_loc = None
 
-        # prepare_for_decode swapped output_ids -> input_ids and cleared
-        # output_ids. Restore it so the next prepare_for_decode replays the
-        # swap correctly. input_ids will be overwritten on that next call.
         if batch.output_ids is None:
             batch.output_ids = batch.input_ids
 
@@ -414,10 +393,6 @@ class OmniScheduler:
             req.kv_committed_len -= 1
             req.kv_allocated_len -= 1
 
-        # prepare_for_decode used in-place ``.add_(1)`` on the non-overlap path
-        # we always run; mirror with in-place ``.sub_(1)``. Out-of-place ops
-        # (the overlap path) would need a different rollback, but the
-        # OmniScheduler-backed stages never enable that path.
         batch.seq_lens.sub_(1)
         batch.seq_lens_cpu.sub_(1)
         batch.orig_seq_lens.sub_(1)
