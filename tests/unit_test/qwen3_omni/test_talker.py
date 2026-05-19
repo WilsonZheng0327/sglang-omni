@@ -673,9 +673,6 @@ def _build_state_machine_scheduler(
     scheduler._aborted_request_ids = set()
     scheduler.waiting_queue = []
     scheduler._request_builder = request_builder_stub
-    # Satisfy the kv-capacity pre-check added by #465 — any value large enough
-    # that the empty-stub Req's required_tokens (input_len + max_new_tokens = 0)
-    # fits comfortably.
     scheduler.max_req_len = 8192
     return scheduler
 
@@ -686,9 +683,6 @@ def test_process_input_requests_partial_build_state_machine() -> None:
     marked_done = [False]
 
     def stub_request_builder(payload: Any) -> Any:
-        # Mimic the real request_builder: produces a SGLangARRequestData-like
-        # object with .req (Req-like, has .rid, .origin_input_ids, and
-        # .sampling_params.max_new_tokens for the upstream kv-capacity check).
         captured_done = bool(payload.prefetched_stream_done)
         return SimpleNamespace(
             req=SimpleNamespace(
