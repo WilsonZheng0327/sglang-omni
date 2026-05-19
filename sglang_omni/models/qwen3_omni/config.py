@@ -77,21 +77,27 @@ def _aggregate_stage(*, process: str, speech_enabled: bool = False) -> StageConf
     # which is what lets the partial-start policy hook actually fire
     # (otherwise the talker's new_request only arrives after
     # ``stream_done`` and the policy hook can never see a partial prefix).
-    next_stages: list[str] | str = "thinker"
-    project_payload: dict[str, str] | None = None
     if speech_enabled:
-        next_stages = ["thinker", "talker_ar"]
-        project_payload = {
-            "talker_ar": (f"{_PKG}.request_builders.project_mm_aggregate_to_talker_ar"),
-        }
+        return StageConfig(
+            name="mm_aggregate",
+            process=process,
+            factory=f"{_PKG}.stages.create_aggregate_executor",
+            wait_for=["preprocessing", "image_encoder", "audio_encoder"],
+            merge_fn=f"{_PKG}.merge.merge_for_thinker",
+            next=["thinker", "talker_ar"],
+            project_payload={
+                "talker_ar": (
+                    f"{_PKG}.request_builders.project_mm_aggregate_to_talker_ar"
+                ),
+            },
+        )
     return StageConfig(
         name="mm_aggregate",
         process=process,
         factory=f"{_PKG}.stages.create_aggregate_executor",
         wait_for=["preprocessing", "image_encoder", "audio_encoder"],
         merge_fn=f"{_PKG}.merge.merge_for_thinker",
-        next=next_stages,
-        project_payload=project_payload,
+        next="thinker",
     )
 
 
