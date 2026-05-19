@@ -99,11 +99,13 @@ def project_preprocessing_to_thinker_textonly(payload: StagePayload) -> StagePay
         if _has_real_encoder_work(state.encoder_inputs.get(stage_name))
     ]
     blocked_mm = _mm_inputs_with_real_work(state.mm_inputs)
-    if blocked or blocked_mm:
+    blocked_request = _request_inputs_with_media(payload.request.inputs)
+    if blocked or blocked_mm or blocked_request:
         raise ValueError(
             "Qwen3-Omni text-minimal enabled_stages can only serve text-only "
             "requests; preprocessing produced media work "
-            f"(encoder_inputs={blocked}, mm_inputs={blocked_mm}). "
+            f"(encoder_inputs={blocked}, mm_inputs={blocked_mm}, "
+            f"request_inputs={blocked_request}). "
             "Use the full multimodal pipeline or remove media inputs."
         )
     return merge_for_thinker({"preprocessing": payload})
@@ -186,6 +188,46 @@ def _mm_inputs_with_real_work(mm_inputs: dict[str, Any]) -> list[str]:
         ):
             blocked.append(modality)
     return blocked
+
+
+def _request_inputs_with_media(inputs: Any) -> list[str]:
+    blocked: set[str] = set()
+    if isinstance(inputs, dict):
+        for key, modality in (
+            ("images", "image"),
+            ("image", "image"),
+            ("videos", "video"),
+            ("video", "video"),
+            ("audios", "audio"),
+            ("audio", "audio"),
+        ):
+            if inputs.get(key):
+                blocked.add(modality)
+        _collect_media_content_markers(inputs.get("messages"), blocked)
+    else:
+        _collect_media_content_markers(inputs, blocked)
+    return sorted(blocked)
+
+
+def _collect_media_content_markers(value: Any, blocked: set[str]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _collect_media_content_markers(item, blocked)
+        return
+    if not isinstance(value, dict):
+        return
+
+    content_type = value.get("type")
+    if content_type in {"image", "image_url"}:
+        blocked.add("image")
+    elif content_type in {"video", "video_url"}:
+        blocked.add("video")
+    elif content_type in {"audio", "input_audio", "audio_url"}:
+        blocked.add("audio")
+
+    content = value.get("content")
+    if content is not None:
+        _collect_media_content_markers(content, blocked)
 
 
 def _project_encoder_input_metadata(

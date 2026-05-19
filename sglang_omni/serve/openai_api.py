@@ -57,6 +57,7 @@ MIME_TO_FORMAT = {mime: fmt for fmt, mime in FORMAT_MIME_TYPES.items()}
 _BAD_REQUEST_MARKERS = (
     "longer than the model's context length",
     "Requested token count exceeds the model's maximum context length",
+    "text-minimal enabled_stages can only serve text-only requests",
 )
 
 

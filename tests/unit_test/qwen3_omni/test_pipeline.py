@@ -542,6 +542,29 @@ def test_qwen_textonly_fallback_rejects_real_mm_inputs() -> None:
         project_preprocessing_to_thinker_textonly(make_qwen_payload(state))
 
 
+def test_qwen_textonly_fallback_rejects_openai_media_content() -> None:
+    payload = make_qwen_payload(
+        make_qwen_state(),
+        inputs={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AA=="},
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="text-only.*request_inputs=.*image"):
+        project_preprocessing_to_thinker_textonly(payload)
+
+
 def test_qwen_textonly_fallback_allows_skip_encoder_work() -> None:
     state = make_qwen_state(
         encoder_inputs={"image_encoder": {"_skip": True, "_result": {}}}
