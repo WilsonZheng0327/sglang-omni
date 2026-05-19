@@ -371,10 +371,6 @@ class OmniScheduler:
     def get_next_batch_to_run(self):
         batch = _Upstream.get_next_batch_to_run(self)
         if batch is not None and not self._is_batch_ready_to_run(batch):
-            # Upstream already ran prepare_for_decode and allocated a KV slot
-            # we will not consume; release it before returning None so the
-            # next prepare_for_decode does not double-account the same
-            # logical decode step.
             self._rollback_decode_prep_after_skip(batch)
             return None
         return batch
@@ -401,13 +397,8 @@ class OmniScheduler:
         batch.seq_lens_sum -= len(batch.reqs)
 
     def self_check_during_idle(self) -> None:
-        # Upstream's idle check raises ``memory leak detected`` whenever
-        # ``available_size != max_total_num_tokens``. That assumption breaks
-        # for OmniScheduler because ``_is_batch_ready_to_run`` can return
-        # None while ``running_batch`` still holds a stalled request whose
-        # KV slots are legitimately in flight (e.g. the Qwen3-Omni talker
-        # waiting on the next streamed thinker chunk under partial-start).
-        # Skip the idle check whenever we actually have in-flight requests.
+        # Skip the upstream "leak" check while a partial-start req is stalled
+        # in running_batch — its KV slots are in flight, not leaked.
         if self.running_batch is not None and not self.running_batch.is_empty():
             return
         if self.waiting_queue:
