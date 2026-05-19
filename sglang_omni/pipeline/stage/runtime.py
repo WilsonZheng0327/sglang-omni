@@ -599,22 +599,29 @@ class Stage:
                     is_done=True,
                 )
 
-        next_stages = self.get_next(request_id, result)
-        if next_stages is None:
-            # Terminal: notify coordinator
-            await self.control_plane.send_complete(
-                CompleteMessage(
-                    request_id=request_id,
-                    from_stage=self.name,
-                    success=True,
-                    result=result.data,
+        try:
+            next_stages = self.get_next(request_id, result)
+            if next_stages is None:
+                # Terminal: notify coordinator
+                await self.control_plane.send_complete(
+                    CompleteMessage(
+                        request_id=request_id,
+                        from_stage=self.name,
+                        success=True,
+                        result=result.data,
+                    )
                 )
+            else:
+                if isinstance(next_stages, str):
+                    next_stages = [next_stages]
+                for target in next_stages:
+                    await self._send_to_stage(request_id, target, result)
+        except Exception as exc:
+            logger.exception(
+                "Stage %s failed while routing request %s", self.name, request_id
             )
-        else:
-            if isinstance(next_stages, str):
-                next_stages = [next_stages]
-            for target in next_stages:
-                await self._send_to_stage(request_id, target, result)
+            await self._send_failure(request_id, str(exc))
+            return
 
         self._clear_request_state(request_id)
 

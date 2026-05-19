@@ -97,6 +97,37 @@ def test_stage_routes_results_streams_and_clears_abort_state() -> None:
     asyncio.run(_run())
 
 
+def test_stage_projection_failure_completes_request_without_crashing() -> None:
+    """Projection errors are request failures, not stage-process failures."""
+
+    async def _run() -> None:
+        scheduler = FakeScheduler()
+        control_plane = RecordingStageControlPlane()
+
+        def _bad_projector(payload):
+            raise ValueError("projection rejected media")
+
+        stage_obj = make_stage(
+            name="preprocessing",
+            get_next=lambda request_id, output: "thinker",
+            endpoints={"thinker": "inproc://thinker"},
+            project_payload={"thinker": _bad_projector},
+            scheduler=scheduler,
+            control_plane=control_plane,
+        )
+        stage_obj._active_requests.add("req-1")
+        scheduler.outbox.put(make_result_message("req-1", data={"answer": 1}))
+
+        await stage_obj._drain_outbox()
+
+        assert control_plane.sent_to_stage == []
+        assert control_plane.completions[0].success is False
+        assert "projection rejected media" in control_plane.completions[0].error
+        assert "req-1" not in stage_obj._active_requests
+
+    asyncio.run(_run())
+
+
 def test_stage_run_raises_when_scheduler_thread_crashes() -> None:
     async def _run() -> None:
         scheduler = FakeScheduler(fail_start=RuntimeError("boom"))
