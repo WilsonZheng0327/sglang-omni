@@ -8,7 +8,9 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from sglang_omni.client import ClientError, GenerateChunk
+from sglang_omni.errors import PipelineBadRequestError
 from sglang_omni.serve import create_app
+from sglang_omni.serve.openai_api import _is_bad_request_error
 
 
 class FailingSpeechClient:
@@ -63,3 +65,10 @@ def test_speech_stream_returns_error_event_after_chunk_failure() -> None:
         "type": "ClientError",
         "message": "stream failed",
     }
+
+
+def test_pipeline_bad_request_error_is_http_400_classified() -> None:
+    assert _is_bad_request_error(PipelineBadRequestError("invalid media input"))
+    assert _is_bad_request_error(
+        RuntimeError("[sglang_omni.pipeline_bad_request] invalid media input")
+    )

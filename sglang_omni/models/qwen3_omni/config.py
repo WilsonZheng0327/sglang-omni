@@ -44,6 +44,10 @@ def _preprocessing_stage(*, process: str) -> StageConfig:
             "thinker": (
                 f"{_PKG}.request_builders.project_preprocessing_to_thinker_textonly"
             ),
+            "mm_aggregate": (
+                f"{_PKG}.request_builders."
+                "project_preprocessing_to_mm_aggregate_textonly"
+            ),
         },
     )
 

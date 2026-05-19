@@ -23,6 +23,10 @@ def _noop_factory(*args, **kwargs):
     return None
 
 
+def _alt_factory(*args, **kwargs):
+    return None
+
+
 def _stage(
     name: str,
     *,
@@ -256,6 +260,30 @@ class TestProjectPayloadFiltering:
         a = next(s for s in p.stages if s.name == "a")
         assert "d" in a.project_payload
         assert "b" not in a.project_payload
+
+    def test_fallback_project_payload_overrides_partially_pruned_next(self):
+        p = _pipeline(
+            [
+                _stage(
+                    "a",
+                    next_=["b", "c"],
+                    project_payload={
+                        "b": "tests.unit_test.config.test_stage_filter._noop_factory",
+                        "c": "tests.unit_test.config.test_stage_filter._noop_factory",
+                    },
+                    project_payload_fallback={
+                        "c": "tests.unit_test.config.test_stage_filter._alt_factory",
+                    },
+                ),
+                _stage("b", terminal=True),
+                _stage("c", terminal=True),
+            ],
+            enabled_stages=["a", "c"],
+        )
+        a = next(s for s in p.stages if s.name == "a")
+        assert a.project_payload == {
+            "c": "tests.unit_test.config.test_stage_filter._alt_factory"
+        }
 
 
 class TestWaitForFiltering:

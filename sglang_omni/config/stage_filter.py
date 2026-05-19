@@ -93,9 +93,16 @@ def _rewire_stage(stage: "StageConfig", effective: set[str]) -> "StageConfig":
                 else kept_next
             )
             updates["next"] = new_next
-            updates["project_payload"] = {
+            project_payload = {
                 k: v for k, v in stage.project_payload.items() if k in effective
             }
+            pruned_targets = set(targets) - set(kept_next)
+            if pruned_targets:
+                for target in kept_next:
+                    fallback_projection = stage.project_payload_fallback.get(target)
+                    if fallback_projection is not None:
+                        project_payload[target] = fallback_projection
+            updates["project_payload"] = project_payload
         else:
             # All `next` targets disabled — fall back if declared.
             if stage.next_fallback is None:
@@ -128,7 +135,11 @@ def _rewire_stage(stage: "StageConfig", effective: set[str]) -> "StageConfig":
                 else fallback_targets
             )
             # Replace project_payload entirely with the fallback projection.
-            updates["project_payload"] = dict(stage.project_payload_fallback)
+            updates["project_payload"] = {
+                k: v
+                for k, v in stage.project_payload_fallback.items()
+                if k in fallback_targets
+            }
 
     if not updates:
         return stage

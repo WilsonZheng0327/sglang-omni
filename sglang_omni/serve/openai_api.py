@@ -37,6 +37,7 @@ from sglang_omni.client.audio import (
     encode_audio,
     to_numpy,
 )
+from sglang_omni.errors import is_pipeline_bad_request_error
 from sglang_omni.serve.protocol import (
     ChatCompletionAudio,
     ChatCompletionChoice,
@@ -57,11 +58,12 @@ MIME_TO_FORMAT = {mime: fmt for fmt, mime in FORMAT_MIME_TYPES.items()}
 _BAD_REQUEST_MARKERS = (
     "longer than the model's context length",
     "Requested token count exceeds the model's maximum context length",
-    "text-minimal enabled_stages can only serve text-only requests",
 )
 
 
 def _is_bad_request_error(exc: Exception) -> bool:
+    if is_pipeline_bad_request_error(exc):
+        return True
     message = str(exc)
     return any(marker in message for marker in _BAD_REQUEST_MARKERS)
 

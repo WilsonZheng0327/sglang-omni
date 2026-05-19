@@ -16,6 +16,7 @@ from sglang_omni.cli.serve import (
     apply_parallelism_cli_overrides,
 )
 from sglang_omni.config import PipelineConfig, StageConfig, resolve_stage_factory_args
+from sglang_omni.errors import PipelineBadRequestError
 from sglang_omni.models.qwen3_omni.config import (
     Qwen3OmniPipelineConfig,
     Qwen3OmniSpeechPipelineConfig,
@@ -25,6 +26,7 @@ from sglang_omni.models.qwen3_omni.payload_types import PipelineState
 from sglang_omni.models.qwen3_omni.request_builders import (
     build_sglang_thinker_request,
     project_preprocessing_to_mm_aggregate,
+    project_preprocessing_to_mm_aggregate_textonly,
     project_preprocessing_to_thinker_textonly,
 )
 from sglang_omni.scheduling.sglang_backend.server_args_builder import (
@@ -529,7 +531,7 @@ def test_qwen_textonly_fallback_rejects_real_media_encoder_work() -> None:
         encoder_inputs={"image_encoder": {"cache_key": "image-cache"}}
     )
 
-    with pytest.raises(ValueError, match="text-only.*image_encoder"):
+    with pytest.raises(PipelineBadRequestError, match="text-only.*image_encoder"):
         project_preprocessing_to_thinker_textonly(make_qwen_payload(state))
 
 
@@ -538,7 +540,7 @@ def test_qwen_textonly_fallback_rejects_real_mm_inputs() -> None:
         mm_inputs={"image": {"image_grid_thw": torch.tensor([[1, 1, 1]])}}
     )
 
-    with pytest.raises(ValueError, match="text-only.*image"):
+    with pytest.raises(PipelineBadRequestError, match="text-only.*image"):
         project_preprocessing_to_thinker_textonly(make_qwen_payload(state))
 
 
@@ -561,8 +563,28 @@ def test_qwen_textonly_fallback_rejects_openai_media_content() -> None:
         },
     )
 
-    with pytest.raises(ValueError, match="text-only.*request_inputs=.*image"):
+    with pytest.raises(
+        PipelineBadRequestError, match="text-only.*request_inputs=.*image"
+    ):
         project_preprocessing_to_thinker_textonly(payload)
+
+
+def test_qwen_mm_aggregate_textonly_projection_rejects_real_media() -> None:
+    state = make_qwen_state(
+        mm_inputs={"image": {"image_grid_thw": torch.tensor([[1, 1, 1]])}}
+    )
+
+    with pytest.raises(PipelineBadRequestError, match="text-only.*image"):
+        project_preprocessing_to_mm_aggregate_textonly(make_qwen_payload(state))
+
+
+def test_qwen_mm_aggregate_textonly_projection_allows_text() -> None:
+    state = make_qwen_state()
+
+    projected = project_preprocessing_to_mm_aggregate_textonly(make_qwen_payload(state))
+
+    projected_state = PipelineState.from_dict(projected.data)
+    assert projected_state.mm_inputs == {"image": {}, "audio": {}, "video": {}}
 
 
 def test_qwen_textonly_fallback_allows_skip_encoder_work() -> None:

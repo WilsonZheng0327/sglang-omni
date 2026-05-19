@@ -176,7 +176,7 @@ class StageConfig(BaseModel):
     # --- Stage-selection metadata ---
     # Auto-include this stage when PipelineConfig.enabled_stages is set.
     required: bool = False
-    # Replacement route/projections when enabled_stages prunes all `next` targets.
+    # Replacement/override projections when enabled_stages prunes `next` targets.
     next_fallback: str | list[str] | None = None
     project_payload_fallback: dict[str, str] = Field(default_factory=dict)
 

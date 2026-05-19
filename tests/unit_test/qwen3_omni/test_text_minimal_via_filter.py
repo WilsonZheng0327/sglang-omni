@@ -105,3 +105,15 @@ def test_omitting_decode_keeps_decode_via_required():
     names = {s.name for s in config.stages}
     # preprocessing (whitelist) + thinker + decode (both required) = 3
     assert names == {"preprocessing", "thinker", "decode"}
+
+
+def test_partial_multimodal_prune_uses_guarded_mm_aggregate_projection():
+    config = Qwen3OmniPipelineConfig(
+        model_path="fake/Qwen3-Omni-30B-A3B-Instruct",
+        enabled_stages=["preprocessing", "mm_aggregate", "decode"],
+    )
+
+    prep = _stage(config, "preprocessing")
+    assert prep.project_payload["mm_aggregate"].endswith(
+        "project_preprocessing_to_mm_aggregate_textonly"
+    )

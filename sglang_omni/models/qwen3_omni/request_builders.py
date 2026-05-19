@@ -11,6 +11,7 @@ from typing import Any
 import torch
 import xxhash
 
+from sglang_omni.errors import PipelineBadRequestError
 from sglang_omni.models.qwen3_omni.components.talker_prefill import TalkerPrefillBuilder
 from sglang_omni.models.qwen3_omni.payload_types import PipelineState, ThinkerOutput
 from sglang_omni.proto import StagePayload
@@ -93,21 +94,7 @@ def project_preprocessing_to_thinker_textonly(payload: StagePayload) -> StagePay
     from sglang_omni.models.qwen3_omni.merge import merge_for_thinker
 
     state = PipelineState.from_dict(payload.data)
-    blocked = [
-        stage_name
-        for stage_name in (IMAGE_STAGE, AUDIO_STAGE)
-        if _has_real_encoder_work(state.encoder_inputs.get(stage_name))
-    ]
-    blocked_mm = _mm_inputs_with_real_work(state.mm_inputs)
-    blocked_request = _request_inputs_with_media(payload.request.inputs)
-    if blocked or blocked_mm or blocked_request:
-        raise ValueError(
-            "Qwen3-Omni text-minimal enabled_stages can only serve text-only "
-            "requests; preprocessing produced media work "
-            f"(encoder_inputs={blocked}, mm_inputs={blocked_mm}, "
-            f"request_inputs={blocked_request}). "
-            "Use the full multimodal pipeline or remove media inputs."
-        )
+    _validate_text_minimal_request(payload, state)
     return merge_for_thinker({"preprocessing": payload})
 
 
@@ -121,6 +108,23 @@ def project_preprocessing_to_audio_encoder(payload: StagePayload) -> StagePayloa
 
 def project_preprocessing_to_mm_aggregate(payload: StagePayload) -> StagePayload:
     state = PipelineState.from_dict(payload.data)
+    return _project_preprocessing_to_mm_aggregate_state(payload, state)
+
+
+def project_preprocessing_to_mm_aggregate_textonly(
+    payload: StagePayload,
+) -> StagePayload:
+    """Project preprocessing → aggregate when encoder fan-in has been pruned."""
+
+    state = PipelineState.from_dict(payload.data)
+    _validate_text_minimal_request(payload, state)
+    return _project_preprocessing_to_mm_aggregate_state(payload, state)
+
+
+def _project_preprocessing_to_mm_aggregate_state(
+    payload: StagePayload,
+    state: PipelineState,
+) -> StagePayload:
     projected = PipelineState(
         prompt=dict(state.prompt) if isinstance(state.prompt, dict) else None,
         mm_inputs=build_lightweight_mm_inputs(state.mm_inputs),
@@ -169,6 +173,27 @@ def _select_encoder_inputs(
     if not isinstance(stage_inputs, dict):
         return {}
     return {stage_name: dict(stage_inputs)}
+
+
+def _validate_text_minimal_request(
+    payload: StagePayload,
+    state: PipelineState,
+) -> None:
+    blocked = [
+        stage_name
+        for stage_name in (IMAGE_STAGE, AUDIO_STAGE)
+        if _has_real_encoder_work(state.encoder_inputs.get(stage_name))
+    ]
+    blocked_mm = _mm_inputs_with_real_work(state.mm_inputs)
+    blocked_request = _request_inputs_with_media(payload.request.inputs)
+    if blocked or blocked_mm or blocked_request:
+        raise PipelineBadRequestError(
+            "Qwen3-Omni text-minimal enabled_stages can only serve text-only "
+            "requests; preprocessing produced media work "
+            f"(encoder_inputs={blocked}, mm_inputs={blocked_mm}, "
+            f"request_inputs={blocked_request}). "
+            "Use the full multimodal pipeline or remove media inputs."
+        )
 
 
 def _has_real_encoder_work(stage_inputs: Any) -> bool:
