@@ -104,10 +104,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--partial-start-min-chunks",
         type=int,
-        default=None,
+        default=5,
         help=(
-            "Chunk-count threshold for partial-start. "
-            "Only used when --enable-partial-start is set; "
+            "Chunk-count threshold for partial-start (default 5). "
+            "Only consumed when --enable-partial-start is set; "
             "must be >= MIN_PARTIAL_START_CHUNKS (3)."
         ),
     )
@@ -249,18 +249,14 @@ def _launch_speech_server(args: argparse.Namespace) -> None:
             updates=thinker_seq_len_updates,
         )
 
-    partial_start_updates: dict[str, object] = {}
     if args.enable_partial_start:
-        partial_start_updates["enable_partial_start"] = True
-    if args.partial_start_min_chunks is not None:
-        partial_start_updates["partial_start_min_chunks"] = int(
-            args.partial_start_min_chunks
-        )
-    if partial_start_updates:
         _apply_stage_factory_updates(
             config,
             stage_name="talker_ar",
-            updates=partial_start_updates,
+            updates={
+                "enable_partial_start": True,
+                "partial_start_min_chunks": int(args.partial_start_min_chunks),
+            },
         )
 
     launch_server(

@@ -976,7 +976,7 @@ def create_talker_ar_executor_from_config(
     weight_prefix: str = "talker.",
     total_gpu_memory_fraction: float | None = None,
     enable_partial_start: bool = False,
-    partial_start_min_chunks: int | None = None,
+    partial_start_min_chunks: int = 5,
 ):
     """Returns OmniScheduler for talker."""
     from sglang_omni.models.qwen3_omni.bootstrap import create_talker_scheduler

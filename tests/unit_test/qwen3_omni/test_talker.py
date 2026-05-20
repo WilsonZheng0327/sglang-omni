@@ -974,6 +974,128 @@ def test_rollback_decode_prep_after_skip_is_noop_for_prefill_batches() -> None:
     assert freed == []
 
 
+def test_prepare_for_decode_side_effect_contract_with_upstream() -> None:
+    """Lock in the upstream side-effect set our rollback knows about.
+
+    Fires when upstream ``ScheduleBatch.prepare_for_decode`` adds writes
+    that our ``_rollback_decode_prep_after_skip`` does not undo. If this
+    test fails after a sglang bump, either extend the rollback or extend
+    the documented invariant (overlap disabled / no Mamba / no hisparse).
+    """
+    import inspect
+
+    from sglang.srt.managers.schedule_batch import ScheduleBatch
+
+    src = inspect.getsource(ScheduleBatch.prepare_for_decode)
+    expected_writes = {
+        # Rolled back by _rollback_decode_prep_after_skip
+        "out_cache_loc",
+        "output_ids",
+        "input_ids",
+        "decode_batch_idx",
+        "kv_committed_len",
+        "kv_allocated_len",
+        "seq_lens",
+        "seq_lens_cpu",
+        "orig_seq_lens",
+        "seq_lens_sum",
+        # Documented as safe under talker server_args (not rolled back)
+        "forward_mode",
+        "input_embeds",
+        "attn_cp_metadata",
+        "penalizer_orchestrator",
+        "hisparse_coordinator",
+    }
+    # Heuristic scan: tokens that appear as ``self.X =`` / ``self.X.<call>(``
+    # in prepare_for_decode. Each must either be rolled back or live in the
+    # documented invariant set.
+    import re
+
+    self_assignments = set(re.findall(r"self\.([A-Za-z_][A-Za-z0-9_]*)", src))
+    novel = (
+        self_assignments
+        - expected_writes
+        - {
+            # Read-only attributes referenced via self.X in prepare_for_decode
+            "model_runner",
+            "spec_algorithm",
+            "tree_cache",
+            "req_to_token_pool",
+            "token_to_kv_pool_allocator",
+            "server_args",
+            "reqs",
+            "is_v1",
+            "v1_spec_info",
+            "v1_spec_info_filtered",
+            "padded_static_len",
+            "extend_seq_lens",
+            "extend_prefix_lens",
+            "extend_logprob_start_lens",
+            "encoder_lens",
+            "encoder_cached",
+            "encoder_out_cache_loc",
+            "encoder_lens_cpu",
+            "model_config",
+            "device",
+            "global_num_tokens",
+            "global_num_tokens_for_logprob",
+            "global_num_tokens_for_logprob_cpu",
+            "global_num_tokens_cpu",
+            "spec_info",
+            "speculative_num_draft_tokens",
+            "is_extend_in_batch",
+            "global_dp_buffer_len",
+            "global_num_tokens_dispatch",
+            "global_num_tokens_dispatch_cpu",
+            "can_run_dp_cuda_graph",
+            "dp_padding_mode",
+            "is_prefill_only",
+            "global_forward_mode",
+            "is_prefill_only_real",
+            "batch_size_real",
+            "batch_size_method",
+            "batch_size_pd",
+            "speculative_algorithm",
+            "speculative_num_steps",
+            "is_speculative_extend",
+            "tp_size",
+            "real_bs",
+            "chunked_req",
+            "padded_extend_len",
+            "padded_static_len_min",
+            "padded_static_len_max",
+            "is_speculative",
+            "draft_model_runner",
+            "draft_model_config",
+            "padded_extend_lens",
+            "moe_runner_input",
+            "real_decode_bs",
+            "real_extend_bs",
+            "split_index",
+            "lora_paths",
+            "kv_cache",
+            "token_ids_logprobs",
+            "batch_is_full",
+            "is_extend",
+            "extend_num_tokens",
+            "padded_extend_num_tokens",
+            "padded_decode_bs",
+            "padded_padded_extend_num_tokens",
+            "padded_real_bs",
+            "use_v1_spec",
+            "spec_chunk_size_cap",
+            "padded_spec_chunk_size",
+            "next_batch_sampling_info",
+        }
+    )
+    assert novel == set(), (
+        "ScheduleBatch.prepare_for_decode now writes attribute(s) "
+        f"{sorted(novel)} that QwenTalkerScheduler._rollback_decode_prep_after_skip "
+        "does not undo. Either extend the rollback or expand the docstring "
+        "invariant set in talker_scheduler.py."
+    )
+
+
 def test_qwen_model_runner_and_code_predictor_tensor_contracts() -> None:
     """Preserves multimodal embed injection and code-predictor token shape."""
 

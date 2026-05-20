@@ -44,13 +44,26 @@ MIN_PARTIAL_START_CHUNKS = 3
 class QwenTalkerScheduler(OmniScheduler):
     """Talker scheduler with Qwen-specific request and decode readiness.
 
-    The decode-stall handling (``get_next_batch_to_run`` override + rollback
-    of ``prepare_for_decode``) is intentionally scoped here, not on the
-    shared ``OmniScheduler``. The rollback only undoes the side-effect set
-    that the talker's server_args produce — overlap scheduling is disabled
-    by ``configure_talker_server_args`` and Qwen3-Omni has no Mamba state,
-    so ``req_to_token_pool`` writes are the only remaining upstream effect
-    and they are idempotent across repeated stalls on the same step.
+    The decode-stall handling (``get_next_batch_to_run`` override +
+    ``_rollback_decode_prep_after_skip``) is scoped here, not on the shared
+    ``OmniScheduler``, because the rollback is **not a full inverse** of
+    upstream ``ScheduleBatch.prepare_for_decode``. Upstream writes/clears
+    (depending on server_args): ``out_cache_loc``, ``input_ids`` /
+    ``output_ids``, ``seq_lens`` / ``seq_lens_cpu`` / ``orig_seq_lens`` /
+    ``seq_lens_sum``, per-req ``decode_batch_idx`` / ``kv_committed_len`` /
+    ``kv_allocated_len``, ``forward_mode``, ``input_embeds``,
+    ``attn_cp_metadata``, ``sampling_info.penalizer_orchestrator``
+    cumulate-output-tokens state, ``hisparse_coordinator``, Mamba buffers,
+    and ``req_to_token_pool`` writes.
+
+    This rollback only undoes the first set explicitly. The remainder is
+    safe **only** because the talker config disables them or makes them
+    idempotent: ``configure_talker_server_args`` sets
+    ``disable_overlap_schedule=True``, Qwen3-Omni has no Mamba state, the
+    repetition-penalty path is a scatter that is idempotent on the same
+    output_id within one step, and hisparse is unused. Other schedulers
+    MUST NOT inherit this rollback without verifying their server_args
+    produce the same effective subset.
     """
 
     # Class-level defaults so object.__new__ test helpers see a disabled state.
