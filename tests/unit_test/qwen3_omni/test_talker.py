@@ -1005,6 +1005,18 @@ def test_prepare_for_decode_side_effect_contract_with_upstream() -> None:
         "attn_cp_metadata",
         "penalizer_orchestrator",
         "hisparse_coordinator",
+        # sampling_info: container accessed for penalizer_orchestrator;
+        # idempotent under repeated stalls within one step.
+        "sampling_info",
+        # enable_overlap / is_spec_v2: read-only flags; talker has overlap
+        # disabled and is not in spec-decode mode.
+        "enable_overlap",
+        "is_spec_v2",
+        # Mamba trackers: talker is non-Mamba.
+        "mamba_track_indices",
+        "mamba_track_mask",
+        # Method reference, not an attribute write.
+        "prepare_encoder_info_decode",
     }
     # Heuristic scan: tokens that appear as ``self.X =`` / ``self.X.<call>(``
     # in prepare_for_decode. Each must either be rolled back or live in the

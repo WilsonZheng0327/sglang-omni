@@ -59,11 +59,16 @@ class QwenTalkerScheduler(OmniScheduler):
     This rollback only undoes the first set explicitly. The remainder is
     safe **only** because the talker config disables them or makes them
     idempotent: ``configure_talker_server_args`` sets
-    ``disable_overlap_schedule=True``, Qwen3-Omni has no Mamba state, the
-    repetition-penalty path is a scatter that is idempotent on the same
-    output_id within one step, and hisparse is unused. Other schedulers
-    MUST NOT inherit this rollback without verifying their server_args
-    produce the same effective subset.
+    ``disable_overlap_schedule=True`` (so ``enable_overlap`` is False and
+    no overlap tensor swap fires), Qwen3-Omni has no Mamba state (so
+    ``mamba_track_indices`` / ``mamba_track_mask`` are unused), the
+    repetition-penalty scatter inside
+    ``sampling_info.penalizer_orchestrator`` is idempotent on the same
+    output_id within one step, ``is_spec_v2`` is False (no spec-decode
+    fast path), and hisparse is unused. Other schedulers MUST NOT inherit
+    this rollback without verifying their server_args produce the same
+    effective subset; see
+    ``test_prepare_for_decode_side_effect_contract_with_upstream``.
     """
 
     # Class-level defaults so object.__new__ test helpers see a disabled state.
