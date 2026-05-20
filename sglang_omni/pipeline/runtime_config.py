@@ -10,6 +10,7 @@ import socket
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from sglang_omni.config.placement import StagePlacementPlan, build_stage_placement_plan
 from sglang_omni.config.schema import PipelineConfig, StageConfig
@@ -46,6 +47,48 @@ class IpcRuntimeDir:
             logger.warning("Failed to remove IPC runtime dir %s: %s", self.path, exc)
 
 
+class TcpEndpointReservation:
+    """Parent-owned TCP port reservations for one pipeline startup.
+
+    These sockets keep auto-selected TCP ports owned while runtime prep builds
+    the launch plan. The runner releases each endpoint when handing ownership
+    to the component that binds it.
+    """
+
+    def __init__(self, sockets: dict[str, socket.socket]):
+        self._sockets = dict(sockets)
+
+    def __repr__(self) -> str:
+        return f"TcpEndpointReservation(keys={sorted(self._sockets)})"
+
+    @property
+    def keys(self) -> set[str]:
+        return set(self._sockets)
+
+    def release(
+        self,
+        keys: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> None:
+        selected = list(self._sockets) if keys is None else list(keys)
+        for key in selected:
+            sock = self._sockets.pop(key, None)
+            if sock is None:
+                continue
+            try:
+                sock.close()
+            except OSError as exc:
+                logger.warning("Failed to release TCP endpoint %s: %s", key, exc)
+
+    def close(self) -> None:
+        self.release()
+
+
+@dataclass(frozen=True)
+class EndpointAllocation:
+    endpoints: dict[str, str]
+    reservation: TcpEndpointReservation | None = None
+
+
 @dataclass(frozen=True)
 class PipelineRuntimePrep:
     """Prepared stage, endpoint, placement, and topology state."""
@@ -58,6 +101,7 @@ class PipelineRuntimePrep:
     process_plan: ProcessTopologyPlan
     runtime_dir: IpcRuntimeDir | None
     runtime_dir_created_here: bool
+    endpoint_reservation: TcpEndpointReservation | None = None
 
 
 def create_ipc_runtime_dir(config: PipelineConfig) -> IpcRuntimeDir | None:
@@ -96,11 +140,12 @@ def prepare_pipeline_runtime(
             placement_plan,
             stages_cfg=stages_cfg,
         )
-        endpoints = allocate_endpoints(
+        endpoint_allocation = allocate_pipeline_endpoints(
             config,
             stages=stages_cfg,
             ipc_base_dir=runtime_dir.path if runtime_dir else None,
         )
+        endpoints = endpoint_allocation.endpoints
     except Exception:
         if created_runtime_dir is not None:
             created_runtime_dir.close()
@@ -115,6 +160,7 @@ def prepare_pipeline_runtime(
         process_plan=process_plan,
         runtime_dir=runtime_dir,
         runtime_dir_created_here=runtime_dir_created_here,
+        endpoint_reservation=endpoint_allocation.reservation,
     )
 
 
@@ -164,29 +210,64 @@ def parse_gpu_id(device: str) -> int | None:
     raise ValueError(f"Unsupported device string: {device}")
 
 
-def find_free_tcp_ports(start: int, count: int) -> list[int]:
-    """Find *count* available TCP ports starting from *start*."""
-    ports: list[int] = []
+def reserve_free_tcp_ports(
+    start: int,
+    count: int,
+    *,
+    exclude_ports: set[int] | None = None,
+) -> list[socket.socket]:
+    """Reserve *count* available TCP ports starting from *start*.
+
+    The returned sockets remain bound until closed by the caller.
+    """
+
+    sockets: list[socket.socket] = []
+    excluded = exclude_ports or set()
     port = start
-    while len(ports) < count:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("127.0.0.1", port))
-                ports.append(port)
-        except OSError:
-            # Port is already bound or otherwise unbindable; advance to the
-            # next candidate.
-            pass
-        port += 1
-    return ports
+    try:
+        while len(sockets) < count:
+            if port in excluded:
+                port += 1
+                continue
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                sock.close()
+            else:
+                sockets.append(sock)
+            port += 1
+    except Exception:
+        for sock in sockets:
+            sock.close()
+        raise
+    return sockets
 
 
-def allocate_endpoints(
+def _tcp_endpoint_port(endpoint: str) -> int | None:
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "tcp":
+        return None
+    try:
+        return parsed.port
+    except ValueError:
+        return None
+
+
+def _explicit_tcp_ports(endpoints: dict[str, str]) -> set[int]:
+    return {
+        port
+        for endpoint in endpoints.values()
+        if (port := _tcp_endpoint_port(endpoint)) is not None
+    }
+
+
+def allocate_pipeline_endpoints(
     config: PipelineConfig,
     *,
     stages: list[StageConfig],
     ipc_base_dir: Path | None = None,
-) -> dict[str, str]:
+) -> EndpointAllocation:
     endpoints: dict[str, str] = {}
 
     if config.completion_endpoint:
@@ -204,21 +285,46 @@ def allocate_endpoints(
             endpoints[f"stage_{stage.name}"] = (
                 f"ipc://{base_dir}/stage_{stage.name}.sock"
             )
-        return endpoints
+        return EndpointAllocation(endpoints=endpoints)
 
     if config.endpoints.scheme == "tcp":
-        needed = 2 + len(stages)
-        ports = find_free_tcp_ports(config.endpoints.base_port, needed)
-        idx = 0
+        endpoint_keys: list[str] = []
         if "completion" not in endpoints:
-            endpoints["completion"] = f"tcp://127.0.0.1:{ports[idx]}"
-            idx += 1
+            endpoint_keys.append("completion")
         if "abort" not in endpoints:
-            endpoints["abort"] = f"tcp://127.0.0.1:{ports[idx]}"
-            idx += 1
+            endpoint_keys.append("abort")
         for stage in stages:
-            endpoints[f"stage_{stage.name}"] = f"tcp://127.0.0.1:{ports[idx]}"
-            idx += 1
-        return endpoints
+            endpoint_keys.append(f"stage_{stage.name}")
+
+        reserved_sockets = reserve_free_tcp_ports(
+            config.endpoints.base_port,
+            len(endpoint_keys),
+            exclude_ports=_explicit_tcp_ports(endpoints),
+        )
+        reservation_sockets: dict[str, socket.socket] = {}
+        for key, sock in zip(endpoint_keys, reserved_sockets, strict=True):
+            port = sock.getsockname()[1]
+            endpoints[key] = f"tcp://127.0.0.1:{port}"
+            reservation_sockets[key] = sock
+        reservation = (
+            TcpEndpointReservation(reservation_sockets) if reservation_sockets else None
+        )
+        return EndpointAllocation(endpoints=endpoints, reservation=reservation)
 
     raise ValueError(f"Unknown endpoint scheme: {config.endpoints.scheme}")
+
+
+def allocate_endpoints(
+    config: PipelineConfig,
+    *,
+    stages: list[StageConfig],
+    ipc_base_dir: Path | None = None,
+) -> dict[str, str]:
+    allocation = allocate_pipeline_endpoints(
+        config,
+        stages=stages,
+        ipc_base_dir=ipc_base_dir,
+    )
+    if allocation.reservation is not None:
+        allocation.reservation.close()
+    return allocation.endpoints

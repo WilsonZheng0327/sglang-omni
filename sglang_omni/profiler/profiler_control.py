@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from sglang_omni.pipeline.control_plane import PushSocket
 from sglang_omni.proto import ProfilerStartMessage, ProfilerStopMessage
@@ -42,7 +41,6 @@ class ProfilerControlClient:
         self,
         run_id: str,
         trace_path_template: str,
-        config: dict[str, Any] | None = None,
         stages: list[str] | None = None,
     ) -> None:
         await self.start()

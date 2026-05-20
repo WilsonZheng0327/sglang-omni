@@ -279,6 +279,8 @@ class StageControlPlane:
 
     async def start(self) -> None:
         """Initialize all sockets."""
+        if self._recv_socket is not None:
+            return
         # Socket to receive work
         self._recv_socket = PullSocket(self.recv_endpoint, bind=True)
         await self._recv_socket.start()
@@ -387,6 +389,8 @@ class CoordinatorControlPlane:
 
     async def start(self) -> None:
         """Initialize all sockets."""
+        if self._completion_socket is not None:
+            return
         # Socket to receive completions
         self._completion_socket = PullSocket(self.completion_endpoint, bind=True)
         await self._completion_socket.start()

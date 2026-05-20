@@ -25,6 +25,7 @@ from sglang_omni.pipeline import Coordinator
 from sglang_omni.pipeline.runtime_config import (
     IpcRuntimeDir,
     PipelineRuntimePrep,
+    TcpEndpointReservation,
     build_relay_config,
     prepare_pipeline_runtime,
 )
@@ -287,6 +288,7 @@ class MultiProcessPipelineRunner:
         self._fatal_event: asyncio.Event | None = None
         self._fatal_error: BaseException | None = None
         self._prep: PipelineRuntimePrep | None = None
+        self._endpoint_reservation: TcpEndpointReservation | None = None
         self._started = False
 
     @property
@@ -326,6 +328,7 @@ class MultiProcessPipelineRunner:
             )
             self._prep = prep
             self._ipc_runtime_dir = prep.runtime_dir
+            self._endpoint_reservation = prep.endpoint_reservation
             groups = _build_stage_groups(
                 self._config,
                 ctx,
@@ -342,6 +345,7 @@ class MultiProcessPipelineRunner:
                 entry_stage=prep.entry_stage,
                 terminal_stages=self._config.terminal_stages or None,
             )
+            self._release_endpoint_reservations({"completion", "abort"})
             await self._coordinator.start()
             self._completion_task = asyncio.create_task(
                 self._coordinator.run_completion_loop()
@@ -349,6 +353,12 @@ class MultiProcessPipelineRunner:
 
             self._groups = groups
             for group in self._groups:
+                self._release_endpoint_reservations(
+                    {
+                        f"stage_{stage_name}"
+                        for stage_name in group.stage_control_endpoints
+                    }
+                )
                 group.spawn(ctx)
 
             await asyncio.gather(*(g.wait_ready(timeout) for g in self._groups))
@@ -365,6 +375,7 @@ class MultiProcessPipelineRunner:
                     self._coordinator.register_stage(stage_name, endpoint)
 
             self._started = True
+            self._release_endpoint_reservations()
             self._monitor_task = asyncio.create_task(self._monitor_children())
 
             total_stages = sum(
@@ -425,6 +436,13 @@ class MultiProcessPipelineRunner:
         self._ipc_runtime_dir.close()
         self._ipc_runtime_dir = None
 
+    def _release_endpoint_reservations(self, keys: set[str] | None = None) -> None:
+        if self._endpoint_reservation is None:
+            return
+        self._endpoint_reservation.release(keys)
+        if not self._endpoint_reservation.keys:
+            self._endpoint_reservation = None
+
     async def stop(self) -> None:
         if not self._started:
             return
@@ -455,6 +473,7 @@ class MultiProcessPipelineRunner:
         self._coordinator = None
 
         self._close_runtime_dir()
+        self._release_endpoint_reservations()
 
     async def _cleanup_on_failure(self) -> None:
         """Best-effort cleanup after a failed start()."""
@@ -467,6 +486,7 @@ class MultiProcessPipelineRunner:
                 if p.is_alive():
                     p.kill()
                     p.join(timeout=2)
+            group.close_control_channels()
         self._groups.clear()
 
         await self._cancel_completion_task()
@@ -479,3 +499,4 @@ class MultiProcessPipelineRunner:
             self._coordinator = None
 
         self._close_runtime_dir()
+        self._release_endpoint_reservations()

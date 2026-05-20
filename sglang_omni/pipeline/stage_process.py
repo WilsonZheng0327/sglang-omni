@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import os
 import sys
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
@@ -99,25 +100,38 @@ class StageWorkerProcessSpec:
 def stage_process_main(
     spec: StageWorkerProcessSpec,
     ready_event: multiprocessing.Event,
+    startup_error_queue: Any | None = None,
 ) -> None:
     """Subprocess entrypoint: construct stage(s) from *spec* and run them."""
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    if not spec.stage_specs:
-        raise ValueError(f"Process {spec.process_name!r} requires at least one stage")
     log = logging.getLogger(f"stage_process.{spec.process_name}")
 
     try:
+        if not spec.stage_specs:
+            raise ValueError(
+                f"Process {spec.process_name!r} requires at least one stage"
+            )
         for stage_spec in spec.stage_specs:
             _prepare_cuda_environment(stage_spec, log)
         _run_process(spec, ready_event, log)
     except Exception:
         import traceback
 
+        traceback_text = traceback.format_exc()
         log.error(
             "Stage process %s failed:\n%s",
             spec.process_name,
-            traceback.format_exc(),
+            traceback_text,
         )
+        if startup_error_queue is not None:
+            with suppress(Exception):
+                startup_error_queue.put(
+                    {
+                        "process_name": spec.process_name,
+                        "stage_names": [s.stage_name for s in spec.stage_specs],
+                        "traceback": traceback_text,
+                    }
+                )
         sys.exit(1)
 
 
@@ -140,11 +154,41 @@ def _run_process(
       live in this process, cold-start time degrades from ``max`` to ``sum``
       across them.
     """
-    stages = [_construct_stage(stage_spec, log) for stage_spec in spec.stage_specs]
+    control_planes = [
+        _construct_control_plane(stage_spec) for stage_spec in spec.stage_specs
+    ]
 
     async def _start_and_run():
         tasks: list[asyncio.Task] = []
+        stages: list[Stage] = []
+        startup_bound_control_planes: list[Any] = []
+        startup_bound_stages: list[Stage] = []
         try:
+            for control_plane in control_planes:
+                startup_bound_control_planes.append(control_plane)
+                await control_plane.start()
+            for stage_spec, control_plane in zip(
+                spec.stage_specs,
+                control_planes,
+                strict=True,
+            ):
+                stage = _construct_stage(
+                    stage_spec,
+                    log,
+                    control_plane=control_plane,
+                    construct_scheduler=False,
+                )
+                stages.append(stage)
+                startup_bound_stages.append(stage)
+            for stage, stage_spec in zip(stages, spec.stage_specs, strict=True):
+                gpu_id = _resolve_runtime_gpu_id(stage_spec)
+                log.info(
+                    "Building scheduler for %s (tp_rank=%d/%d) ...",
+                    stage_spec.stage_name,
+                    stage_spec.tp_rank,
+                    stage_spec.tp_size,
+                )
+                stage.scheduler = _construct_scheduler(stage_spec, gpu_id, log)
             for stage in stages:
                 await stage.start()
             log.info(
@@ -160,37 +204,57 @@ def _run_process(
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+                startup_bound_stages.clear()
             for stage in stages:
-                if getattr(stage, "_running", False):
+                if getattr(stage, "_running", False) or stage in startup_bound_stages:
                     await stage.stop()
+            attached_control_planes = {id(stage.control_plane) for stage in stages}
+            for control_plane in startup_bound_control_planes:
+                if id(control_plane) not in attached_control_planes:
+                    control_plane.close()
 
     asyncio.run(_start_and_run())
+
+
+def _construct_control_plane(spec: StageProcessSpec) -> Any:
+    if spec.owns_external_io:
+        return StageControlPlane(
+            stage_name=spec.stage_name,
+            recv_endpoint=spec.recv_endpoint,
+            coordinator_endpoint=spec.coordinator_endpoint,
+            abort_endpoint=spec.abort_endpoint,
+        )
+    return TPFollowerControlPlane(
+        stage_name=spec.stage_name,
+        recv_endpoint=spec.recv_endpoint,
+        work_queue=spec.internal_work_queue,
+        abort_queue=spec.internal_abort_queue,
+    )
 
 
 def _construct_stage(
     spec: StageProcessSpec,
     log: logging.Logger,
+    *,
+    control_plane: Any | None = None,
+    construct_scheduler: bool = True,
 ) -> Stage:
-    gpu_id = spec.relay_config.get("gpu_id")
-    if gpu_id is None:
-        gpu_id = spec.factory_args.get("gpu_id")
-    if gpu_id is None and _factory_args_use_cuda(spec.factory_args):
-        gpu_id = spec.gpu_id
+    gpu_id = _resolve_runtime_gpu_id(spec)
     if gpu_id is not None:
         import torch
 
         torch.cuda.set_device(int(gpu_id))
         log.info("Set current CUDA device to %s for stage %s", gpu_id, spec.stage_name)
 
-    # --- Build scheduler via factory ---
-    log.info(
-        "Building scheduler for %s (tp_rank=%d/%d) ...",
-        spec.stage_name,
-        spec.tp_rank,
-        spec.tp_size,
-    )
-
-    scheduler = _construct_scheduler(spec, gpu_id, log)
+    scheduler = None
+    if construct_scheduler:
+        log.info(
+            "Building scheduler for %s (tp_rank=%d/%d) ...",
+            spec.stage_name,
+            spec.tp_rank,
+            spec.tp_size,
+        )
+        scheduler = _construct_scheduler(spec, gpu_id, log)
 
     # --- Build routing ---
     if spec.is_terminal:
@@ -218,20 +282,8 @@ def _construct_stage(
         for target, dotted_path in spec.project_payload.items()
     }
 
-    if spec.owns_external_io:
-        control_plane = StageControlPlane(
-            stage_name=spec.stage_name,
-            recv_endpoint=spec.recv_endpoint,
-            coordinator_endpoint=spec.coordinator_endpoint,
-            abort_endpoint=spec.abort_endpoint,
-        )
-    else:
-        control_plane = TPFollowerControlPlane(
-            stage_name=spec.stage_name,
-            recv_endpoint=spec.recv_endpoint,
-            work_queue=spec.internal_work_queue,
-            abort_queue=spec.internal_abort_queue,
-        )
+    if control_plane is None:
+        control_plane = _construct_control_plane(spec)
 
     tp_fanout = None
     if spec.is_leader:
@@ -264,6 +316,15 @@ def _construct_stage(
         stage._stream_queue = StreamQueue(max_pending=4096)
 
     return stage
+
+
+def _resolve_runtime_gpu_id(spec: StageProcessSpec) -> int | None:
+    gpu_id = spec.relay_config.get("gpu_id")
+    if gpu_id is None:
+        gpu_id = spec.factory_args.get("gpu_id")
+    if gpu_id is None and _factory_args_use_cuda(spec.factory_args):
+        gpu_id = spec.gpu_id
+    return gpu_id
 
 
 def _construct_scheduler(

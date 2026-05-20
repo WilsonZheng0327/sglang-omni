@@ -28,18 +28,16 @@ import asyncio
 import logging
 import os
 import socket
-import time
 from contextlib import suppress
 from typing import Any
 
 import uvicorn
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
 from sglang_omni.client import Client
 from sglang_omni.config import PipelineConfig
 from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
 from sglang_omni.profiler.profiler_control import ProfilerControlClient
+from sglang_omni.serve.control_routes import mount_control_routes
 from sglang_omni.serve.openai_api import create_app
 from sglang_omni.utils.gpu_memory import (
     GpuDeviceInfo,
@@ -68,14 +66,6 @@ def _find_available_port(host: str, port: int) -> int:
         free_port = s.getsockname()[1]
     logger.warning("Using port %d instead.", free_port)
     return free_port
-
-
-def _default_run_id() -> str:
-    return time.strftime("run_%Y%m%d_%H%M%S")
-
-
-def _default_template(profiler_dir: str, run_id: str) -> str:
-    return os.path.join(profiler_dir, run_id, "trace")
 
 
 # ---------------------------------------------------------------------------
@@ -147,52 +137,6 @@ def _placement_log_summary(
     }
 
 
-class StartReq(BaseModel):
-    run_id: str | None = None
-    trace_path_template: str | None = None
-    config: dict[str, Any] | None = None
-
-
-class StopReq(BaseModel):
-    run_id: str | None = None
-
-
-def _mount_profiler_routes(
-    app, profiler_ctl: ProfilerControlClient, profiler_dir: str | None
-) -> None:
-    router = APIRouter()
-
-    @router.post("/start_profile")
-    async def start(req: StartReq):
-        run_id = req.run_id or _default_run_id()
-        if req.trace_path_template is not None:
-            tpl = req.trace_path_template
-        elif profiler_dir is not None:
-            tpl = _default_template(profiler_dir, run_id)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "trace_path_template is required when "
-                    "SGLANG_TORCH_PROFILER_DIR is not set"
-                ),
-            )
-        await profiler_ctl.broadcast_start(
-            run_id=run_id,
-            trace_path_template=tpl,
-            config=req.config,
-        )
-        return {"run_id": run_id, "trace_path_template": tpl}
-
-    @router.post("/stop_profile")
-    async def stop(req: StopReq):
-        run_id = req.run_id or "default"
-        await profiler_ctl.broadcast_stop(run_id=run_id)
-        return {"run_id": run_id}
-
-    app.include_router(router)
-
-
 async def _run_server(
     pipeline_config: PipelineConfig,
     *,
@@ -236,6 +180,7 @@ async def _run_server(
         len(gpu_ids),
     )
 
+    profiler_ctl: ProfilerControlClient | None = None
     try:
         cl_kwargs = client_kwargs or {}
         client = Client(coordinator, **cl_kwargs)
@@ -245,8 +190,11 @@ async def _run_server(
             enable_realtime=enable_realtime,
         )
         profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
-        profiler_ctl = ProfilerControlClient(mp_runner.stage_control_endpoints)
-        _mount_profiler_routes(app, profiler_ctl, profiler_dir)
+        profiler_ctl = mount_control_routes(
+            app,
+            mp_runner.stage_control_endpoints,
+            profiler_dir=profiler_dir,
+        )
 
         config = uvicorn.Config(
             app,
@@ -258,6 +206,8 @@ async def _run_server(
         server = uvicorn.Server(config)
         await _serve_with_failure_watch(server, [mp_runner.wait_failed()])
     finally:
+        if profiler_ctl is not None:
+            await profiler_ctl.close()
         logger.info("Shutting down pipeline …")
         await mp_runner.stop()
         logger.info("Pipeline stopped.")

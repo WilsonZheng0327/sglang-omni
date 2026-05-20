@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import queue
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -14,11 +17,17 @@ import sglang_omni.pipeline.mp_runner as mp_runner
 import sglang_omni.pipeline.runtime_config as runtime_config
 import sglang_omni.pipeline.stage.runtime as stage_runtime
 from sglang_omni.config.schema import EndpointsConfig, PipelineConfig, StageConfig
+from sglang_omni.pipeline.stage_group import StageGroup
+from sglang_omni.pipeline.stage_process import StageProcessSpec, StageWorkerProcessSpec
 from tests.unit_test.fixtures.pipeline_fakes import FakeMpContext, FakeRelay
 
 
 def noop_factory():
     return None
+
+
+def failing_factory():
+    raise RuntimeError("factory boom")
 
 
 class _FakeControlPlane:
@@ -109,7 +118,11 @@ def test_prepare_pipeline_runtime_owns_or_preserves_ipc_runtime_dir(
         del args, kwargs
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(runtime_config, "allocate_endpoints", fail_allocate_endpoints)
+    monkeypatch.setattr(
+        runtime_config,
+        "allocate_pipeline_endpoints",
+        fail_allocate_endpoints,
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         runtime_config.prepare_pipeline_runtime(config)
@@ -180,6 +193,144 @@ def test_ipc_stage_groups_use_unique_endpoints_for_same_model_name(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_tcp_endpoint_reservation_owns_ports_until_released(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, scheme="tcp")
+    prep = runtime_config.prepare_pipeline_runtime(config)
+    reservation = prep.endpoint_reservation
+    assert reservation is not None
+
+    endpoint = prep.endpoints["stage_preprocessing"]
+    port = int(endpoint.rsplit(":", 1)[1])
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            with pytest.raises(OSError):
+                probe.bind(("127.0.0.1", port))
+
+        reservation.release({"stage_preprocessing"})
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", port))
+    finally:
+        reservation.close()
+
+
+def test_tcp_endpoint_reservation_skips_explicit_tcp_ports(tmp_path: Path) -> None:
+    probe_sockets = runtime_config.reserve_free_tcp_ports(32123, 3)
+    base_port = probe_sockets[0].getsockname()[1]
+    for sock in probe_sockets:
+        sock.close()
+
+    config = PipelineConfig(
+        model_path="Qwen/Qwen3-Omni-30B-A3B-Instruct",
+        entry_stage="preprocessing",
+        stages=[
+            StageConfig(
+                name="preprocessing",
+                process="pipeline",
+                factory=f"{__name__}.noop_factory",
+                terminal=True,
+            )
+        ],
+        endpoints=EndpointsConfig(
+            scheme="tcp",
+            base_path=str(tmp_path),
+            base_port=base_port,
+        ),
+        completion_endpoint=f"tcp://127.0.0.1:{base_port}",
+    )
+    prep = runtime_config.prepare_pipeline_runtime(config)
+    reservation = prep.endpoint_reservation
+    assert reservation is not None
+    try:
+        auto_ports = {
+            int(prep.endpoints["abort"].rsplit(":", 1)[1]),
+            int(prep.endpoints["stage_preprocessing"].rsplit(":", 1)[1]),
+        }
+        assert prep.endpoints["completion"] == f"tcp://127.0.0.1:{base_port}"
+        assert base_port not in auto_ports
+        assert reservation.keys == {"abort", "stage_preprocessing"}
+    finally:
+        reservation.close()
+
+
+def test_stage_process_binds_control_plane_before_stage_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class ReadyEvent:
+        def __init__(self) -> None:
+            self.is_ready = False
+
+        def set(self) -> None:
+            self.is_ready = True
+            events.append("ready")
+
+    class RecordingControlPlane:
+        def __init__(
+            self,
+            *,
+            stage_name: str,
+            recv_endpoint: str,
+            coordinator_endpoint: str,
+            abort_endpoint: str,
+        ) -> None:
+            del coordinator_endpoint, abort_endpoint
+            self.stage_name = stage_name
+            self.recv_endpoint = recv_endpoint
+
+        async def start(self) -> None:
+            events.append("control_start")
+
+        def close(self) -> None:
+            events.append("control_close")
+
+    class RecordingStage:
+        def __init__(self, *, name: str, control_plane, scheduler, **kwargs) -> None:
+            del kwargs
+            events.append("stage_construct")
+            self.name = name
+            self.control_plane = control_plane
+            self.scheduler = scheduler
+            self._running = False
+
+        async def start(self) -> None:
+            events.append("stage_start")
+            self._running = True
+
+        async def run(self) -> None:
+            events.append("stage_run")
+
+        async def stop(self) -> None:
+            events.append("stage_stop")
+            self._running = False
+
+    import sglang_omni.pipeline.stage_process as stage_process
+
+    monkeypatch.setattr(stage_process, "StageControlPlane", RecordingControlPlane)
+    monkeypatch.setattr(stage_process, "Stage", RecordingStage)
+
+    ready_event = ReadyEvent()
+    stage_process._run_process(
+        StageWorkerProcessSpec(
+            process_name="pipeline",
+            stage_specs=[
+                StageProcessSpec(
+                    stage_name="preprocessing",
+                    factory=f"{__name__}.noop_factory",
+                    recv_endpoint="tcp://127.0.0.1:32123",
+                    coordinator_endpoint="tcp://127.0.0.1:32124",
+                    abort_endpoint="tcp://127.0.0.1:32125",
+                )
+            ],
+        ),
+        ready_event,
+        logging.getLogger("test_stage_process_order"),
+    )
+
+    assert ready_event.is_ready
+    assert events.index("control_start") < events.index("stage_construct")
+
+
 @pytest.mark.asyncio
 async def test_mp_runner_cleans_runtime_dir_on_start_failure(
     tmp_path: Path,
@@ -240,6 +391,10 @@ async def test_mp_runner_cleans_spawned_groups_when_later_spawn_fails(
             self.stage_name = stage_name
             self.fail_spawn = fail_spawn
             self.process = FakeProcess() if not fail_spawn else None
+            self.stage_control_endpoints = {
+                stage_name: f"ipc://stage_{stage_name}.sock"
+            }
+            self.channels_closed = False
 
         @property
         def processes(self) -> list[FakeProcess]:
@@ -252,6 +407,9 @@ async def test_mp_runner_cleans_spawned_groups_when_later_spawn_fails(
 
         async def wait_ready(self, timeout: float) -> None:
             del timeout
+
+        def close_control_channels(self) -> None:
+            self.channels_closed = True
 
     first_group = FakeGroup("preprocessing")
     second_group = FakeGroup("thinker", fail_spawn=True)
@@ -268,7 +426,135 @@ async def test_mp_runner_cleans_spawned_groups_when_later_spawn_fails(
 
     assert first_group.process.terminated
     assert first_group.process.join_count >= 1
+    assert first_group.channels_closed
+    assert second_group.channels_closed
     assert list(tmp_path.iterdir()) == []
+
+
+class _FakeEvent:
+    def is_set(self) -> bool:
+        return False
+
+    def wait(self, timeout=None) -> bool:
+        del timeout
+        return False
+
+
+class _DeadProcess:
+    pid = 123
+    exitcode = 1
+
+    def is_alive(self) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_stage_group_startup_failure_includes_child_traceback() -> None:
+    group = StageGroup(
+        "pipeline",
+        [
+            StageWorkerProcessSpec(
+                process_name="pipeline",
+                stage_specs=[StageProcessSpec(stage_name="preprocessing")],
+            )
+        ],
+    )
+    group._processes = [_DeadProcess()]  # noqa: SLF001 - targeted lifecycle test
+    group._ready_events = [_FakeEvent()]  # noqa: SLF001
+    errors: queue.Queue[dict[str, object]] = queue.Queue()
+    errors.put(
+        {
+            "process_name": "pipeline",
+            "stage_names": ["preprocessing"],
+            "traceback": "Traceback (most recent call last):\nRuntimeError: boom",
+        }
+    )
+    group._startup_error_queues = [errors]  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="RuntimeError: boom"):
+        await group.wait_ready(timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_mp_runner_startup_failure_includes_child_factory_traceback(
+    tmp_path: Path,
+) -> None:
+    config = PipelineConfig(
+        model_path="Qwen/Qwen3-Omni-30B-A3B-Instruct",
+        name="x",
+        entry_stage="preprocessing",
+        stages=[
+            StageConfig(
+                name="preprocessing",
+                process="pipeline",
+                factory=f"{__name__}.failing_factory",
+                terminal=True,
+            )
+        ],
+        endpoints=EndpointsConfig(scheme="ipc", base_path=str(tmp_path)),
+    )
+    runner = mp_runner.MultiProcessPipelineRunner(config)
+
+    with pytest.raises(RuntimeError, match="factory boom"):
+        await runner.start(timeout=10.0)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_stage_group_closes_parent_owned_control_queues() -> None:
+    class CloseableQueue:
+        def __init__(self) -> None:
+            self.closed = 0
+            self.joined = 0
+
+        def close(self) -> None:
+            self.closed += 1
+
+        def join_thread(self) -> None:
+            self.joined += 1
+
+    work_q = CloseableQueue()
+    abort_q = CloseableQueue()
+    startup_q = CloseableQueue()
+    group = StageGroup(
+        "thinker",
+        [
+            StageWorkerProcessSpec(
+                process_name="thinker_tp0",
+                stage_specs=[
+                    StageProcessSpec(
+                        stage_name="thinker",
+                        role="leader",
+                        tp_size=2,
+                        follower_work_queues=[work_q],
+                        follower_abort_queues=[abort_q],
+                    )
+                ],
+            ),
+            StageWorkerProcessSpec(
+                process_name="thinker_tp1",
+                stage_specs=[
+                    StageProcessSpec(
+                        stage_name="thinker",
+                        role="follower",
+                        tp_size=2,
+                        internal_work_queue=work_q,
+                        internal_abort_queue=abort_q,
+                    )
+                ],
+            ),
+        ],
+    )
+    group._startup_error_queues = [startup_q]  # noqa: SLF001
+
+    group.close_control_channels()
+
+    assert work_q.closed == 1
+    assert work_q.joined == 1
+    assert abort_q.closed == 1
+    assert abort_q.joined == 1
+    assert startup_q.closed == 1
+    assert startup_q.joined == 1
 
 
 @pytest.mark.asyncio
@@ -420,6 +706,49 @@ async def test_launcher_uses_runner_and_mounts_profiler_routes(
     mounted_paths = {route.path for route in app.routes}
     assert "/start_profile" in mounted_paths
     assert "/stop_profile" in mounted_paths
+
+
+@pytest.mark.asyncio
+async def test_launcher_closes_mounted_control_route_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _make_config(tmp_path)
+    server_serve = AsyncMock(return_value=None)
+
+    from sglang_omni.serve import launcher
+
+    class FakeProfilerClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    profiler_client = FakeProfilerClient()
+
+    def fake_mount_control_routes(app, stage_control_endpoints, *, profiler_dir=None):
+        del stage_control_endpoints, profiler_dir
+
+        async def start_profile():
+            return {}
+
+        async def stop_profile():
+            return {}
+
+        app.add_api_route("/start_profile", start_profile, methods=["POST"])
+        app.add_api_route("/stop_profile", stop_profile, methods=["POST"])
+        return profiler_client
+
+    monkeypatch.setattr(launcher, "mount_control_routes", fake_mount_control_routes)
+
+    await _run_launcher_with_fake_runner(
+        config=config,
+        serve_mock=server_serve,
+        monkeypatch=monkeypatch,
+    )
+
+    assert profiler_client.closed
 
 
 @pytest.mark.asyncio

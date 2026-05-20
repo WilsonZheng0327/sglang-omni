@@ -64,7 +64,7 @@ It:
 - starts the pipeline runtime
 - creates the `Client`
 - creates the FastAPI app
-- mounts profiling routes on the single-process path
+- mounts profiling/control routes
 - runs Uvicorn
 - stops the runtime on shutdown
 
@@ -80,11 +80,13 @@ The current server exposes these main routes:
 | `GET` | `/v1/models` | Single-model listing for the active pipeline |
 | `POST` | `/v1/chat/completions` | Chat completions, including streaming and optional audio |
 | `POST` | `/v1/audio/speech` | Text-to-speech, raw audio response or SSE chunks when `stream=true` |
-| `POST` | `/start_profile` | Added by the single-process built-in launcher |
-| `POST` | `/stop_profile` | Added by the single-process built-in launcher |
+| `POST` | `/start_profile` | Added by the built-in launcher/control-route helper |
+| `POST` | `/stop_profile` | Added by the built-in launcher/control-route helper |
 
-The profiling routes are mounted by the single-process `launch_server()` path. The
-current multi-process launcher path does not mount them.
+The built-in `launch_server()` path mounts these routes for the active runner.
+Custom FastAPI embedding paths can mount the same route surface with
+`sglang_omni.serve.mount_control_routes(app, runner.stage_control_endpoints, ...)`
+and should close the returned control client during shutdown.
 
 ## Request Mapping
 

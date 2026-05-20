@@ -88,6 +88,7 @@ async def main_async(args: argparse.Namespace) -> None:
     from sglang_omni.client import Client
     from sglang_omni.models.ming_omni.config import MingOmniSpeechPipelineConfig
     from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
+    from sglang_omni.serve import mount_control_routes
     from sglang_omni.serve.openai_api import create_app
 
     gpu_placement = {
@@ -115,9 +116,15 @@ async def main_async(args: argparse.Namespace) -> None:
     await runner.start(timeout=600)
     logger.info("Pipeline ready.")
 
+    profiler_ctl = None
     try:
         client = Client(runner.coordinator)
         app = create_app(client, model_name=args.model_name)
+        profiler_ctl = mount_control_routes(
+            app,
+            runner.stage_control_endpoints,
+            profiler_dir=os.environ.get("SGLANG_TORCH_PROFILER_DIR"),
+        )
 
         server_config = uvicorn.Config(
             app,
@@ -128,6 +135,8 @@ async def main_async(args: argparse.Namespace) -> None:
         server = uvicorn.Server(server_config)
         await server.serve()
     finally:
+        if profiler_ctl is not None:
+            await profiler_ctl.close()
         logger.info("Shutting down pipeline...")
         await runner.stop()
         logger.info("Pipeline stopped.")
