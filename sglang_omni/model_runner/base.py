@@ -265,7 +265,7 @@ class ModelRunner:
             suppress_tokens = data.suppress_tokens
             if not suppress_tokens:
                 req = data.req
-                suppress_tokens = req._codec_suppress_tokens
+                suppress_tokens = getattr(req, "_codec_suppress_tokens", None)
             if not suppress_tokens:
                 continue
             for token_id in suppress_tokens:
