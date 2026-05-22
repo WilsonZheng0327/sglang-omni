@@ -306,17 +306,25 @@ python .claude/skills/tune-ci-thresholds/tune.py --model qwen3-omni-v1 run \
    For `smart` and `full`, first run
    `python tune.py apply-plan --run-dir <run-dir>` to get a JSON with,
    per metric: `source_kind` (bare / nested), `symbol`, `subkey`,
-   `concurrency`, `worst_op`, `per_run_raw`, `worst_rounded` (already
-   rounded to `display.digits`), `current_raw`, and `direction`
-   (`tightens` / `loosens` / `equal` / `unknown`). By default, use
-   `worst_rounded` as the value to write — never re-round, never
-   multiply by `scale`.
-   For non-speed pass/fail thresholds, do not allow display rounding to
-   make the written threshold stricter than the observed worst-of-N: for
-   `worst_op == "min"` the written value must be `<= worst_raw`, and for
-   `worst_op == "max"` the written value must be `>= worst_raw`. If
-   `worst_rounded` violates that bound, write `worst_raw` with enough
-   decimal places to preserve the observed value.
+   `concurrency`, `worst_op`, `per_run_raw`, `worst_raw`, `worst_rounded`
+   (display-only), `write_value` (the literal to write), `current_raw`,
+   and `direction` (`tightens` / `loosens` / `equal` / `unknown`).
+
+   **Which value to write:**
+     - **`wer` and `accuracy`:** always `write_value` (= `worst_raw` exactly).
+       **Never** round WER/accuracy to `display.digits` — report percentages
+       use 2 decimal places for readability, but test-file literals must
+       preserve the full observed float so a max-bound WER threshold is
+       never accidentally tightened (e.g. 0.010596 → 0.01).
+     - **`speed`:** use `write_value` from apply-plan (rounded unless that
+       would tighten beyond `worst_raw`). Never re-round or multiply by
+       `scale`.
+
+   Bounded write rules (enforced in `write_value`):
+     - `worst_op == "min"`: written value must be `<= worst_raw`
+     - `worst_op == "max"`: written value must be `>= worst_raw`
+     If display rounding would violate either bound, `write_value` falls
+     back to `worst_raw` with full precision.
 
    **Mode `full`**: for every metric in every non-docs stage, edit the
    test file using the rules in (b) below, no questions asked.
@@ -331,11 +339,11 @@ python .claude/skills/tune-ci-thresholds/tune.py --model qwen3-omni-v1 run \
        (one per metric) showing:
          - the per-run raw values from `per_run_raw`
          - the current literal in the test file (`current_raw`)
-         - the proposed bounded worst-of-N value
+         - the proposed value (`write_value` — full-precision for wer/acc)
          - direction tag
        with options:
          1. `Keep current` — leave the literal as-is
-         2. `Apply worst-of-N (<value>)` — write the proposed bounded worst-of-N value
+         2. `Apply worst-of-N (<write_value>)` — write `write_value`
          3. `Custom value` — the user supplies a number; write it
             verbatim after validating it parses as a float
        Always include the "Other" free-text fallback (the
@@ -345,16 +353,19 @@ python .claude/skills/tune-ci-thresholds/tune.py --model qwen3-omni-v1 run \
 
    (b) **Edit rules** (used by both `full` and `smart`'s auto-apply
    path, and after the user accepts in interactive prompts):
+     - Write **`write_value`** from `apply-plan` — never `worst_rounded`
+       directly, and never re-format with `display.digits`.
      - **Bare `source`** (no `[...]`), e.g. `MMMU_MIN_ACCURACY`:
-       replace the RHS literal of `MMMU_MIN_ACCURACY = <old>`.
+       replace the RHS literal of `MMMU_MIN_ACCURACY = <old>` with
+       `write_value`.
      - **Nested `source`**, e.g. `_MMMU_P95['throughput_qps']`:
        use the `concurrency` field from `apply-plan` output, then
        replace the entry under
-       `_MMMU_P95[<C>]["throughput_qps"]`. If `concurrency` is null
-       (no `CONCURRENCY` symbol in the test file) and the dict has
-       a single key, fall back to that key; if multiple keys exist
-       and `concurrency` is null, abort the apply step for that
-       metric and warn the user.
+       `_MMMU_P95[<C>]["throughput_qps"]` with `write_value`. If
+       `concurrency` is null (no `CONCURRENCY` symbol in the test file)
+       and the dict has a single key, fall back to that key; if multiple
+       keys exist and `concurrency` is null, abort the apply step for
+       that metric and warn the user.
      - For any metric whose `direction` came back `unknown` (couldn't
        parse current literal — usually means the test file diverged
        from `stages.yaml`), do not edit; warn and continue.
@@ -431,6 +442,9 @@ python .claude/skills/tune-ci-thresholds/tune.py --model qwen3-omni-v1 run \
 - Run `apply_slack` or generate patch files
 - Commit or push without explicit user authorization
 - Edit test files outside of the explicit apply prompt (step 9)
+- Write ad-hoc apply scripts that re-round metrics — always use
+  `apply-plan`'s `write_value` field when editing test files
+- Round WER or accuracy thresholds to `display.digits` (report-only)
 - Ask mid-run for confirmation. (I may ask once up front for missing
   model/stages/repeats — step 2 — and once at the end for the apply
   prompt — step 9. No other questions.)

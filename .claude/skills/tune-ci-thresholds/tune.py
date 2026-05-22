@@ -11,7 +11,7 @@ import argparse, ast, datetime as dt, hashlib, json, os, re, shutil, signal
 import subprocess, sys, time, tomllib
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 SKILL_DIR = Path(__file__).resolve().parent
 MODELS_DIR = SKILL_DIR / "models"
@@ -1660,6 +1660,27 @@ def _classify_direction(worst_op, current, new):
     return "unknown"
 
 
+def _apply_write_value(worst_op: str, worst_raw: float | None,
+                       worst_rounded: float | None,
+                       stage_group: str | None) -> float | None:
+    """Return the literal to write into a test file.
+
+    WER and accuracy are pass/fail thresholds — never display-round them.
+    For speed, use worst_rounded unless it would tighten beyond worst_raw.
+    """
+    if worst_raw is None:
+        return None
+    if stage_group in ("wer", "accuracy"):
+        return worst_raw
+    if worst_rounded is None:
+        return worst_raw
+    if worst_op == "min" and worst_rounded > worst_raw:
+        return worst_raw
+    if worst_op == "max" and worst_rounded < worst_raw:
+        return worst_raw
+    return worst_rounded
+
+
 def apply_plan(run_dir):
     plan = json.loads((run_dir / "plan.json").read_text())
     sy = Path(plan.get("stages_yaml")
@@ -1697,13 +1718,15 @@ def apply_plan(run_dir):
                 worst_rounded = round(worst, digits)
             else:
                 worst, worst_rounded = None, None
+            write_value = _apply_write_value(
+                worst_op, worst, worst_rounded, s.get("group"))
             if kind == "bare":
                 cur = _read_bare_value(text, sym)
             elif kind == "nested":
                 cur = _read_nested_value(text, sym, conc, sub)
             else:
                 cur = None
-            direction = _classify_direction(worst_op, cur, worst_rounded)
+            direction = _classify_direction(worst_op, cur, write_value)
             sg["metrics"].append({
                 "metric_key": mk,
                 "source": m["source"],
@@ -1715,6 +1738,7 @@ def apply_plan(run_dir):
                 "per_run_raw": vals,
                 "worst_raw": worst,
                 "worst_rounded": worst_rounded,
+                "write_value": write_value,
                 "digits": digits,
                 "scale": display.get("scale", 1),
                 "label": display.get("label", mk),
