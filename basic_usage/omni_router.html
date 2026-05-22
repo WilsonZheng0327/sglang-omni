@@ -518,6 +518,19 @@ speech or audio-output support:</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">worker_capabilities</span></code> is omitted and <code class="docutils literal notranslate"><span class="pre">worker_extra_args</span></code> contains
 <code class="docutils literal notranslate"><span class="pre">--text-only</span></code>, the router registers the managed workers with the same text-only
 capability set shown above.</p>
+<p>For short audio-input / text-output MMSU-style workloads, use the fused
+text-path Qwen3-Omni config instead of the default speech-colocated worker:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">launcher</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">local</span>
+<span class="w">  </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-Omni-30B-A3B-Instruct</span>
+<span class="w">  </span><span class="nt">model_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3-omni</span>
+<span class="w">  </span><span class="nt">num_workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">  </span><span class="nt">num_gpus_per_worker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">  </span><span class="nt">worker_extra_args</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;--config</span><span class="nv"> </span><span class="s">examples/configs/qwen3_omni_mmsu.yaml</span><span class="nv"> </span><span class="s">--text-only&quot;</span>
+</pre></div>
+</div>
+<p>This keeps preprocessing, encoders, aggregation, thinker, and decode in one
+worker process while leaving the general speech-colocated topology unchanged.</p>
 </section>
 <section id="launch-worker-servers-manually">
 <h2>Launch Worker Servers Manually<a class="headerlink" href="#launch-worker-servers-manually" title="Link to this heading">#</a></h2>
