@@ -154,6 +154,89 @@ def _smi_lines(cols):
     return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
 
 
+def _gpu_memory_used_mib():
+    out = []
+    for ln in _smi_lines("memory.used"):
+        m = re.search(r"(\d+)", ln)
+        if m:
+            out.append(int(m.group(1)))
+    return out
+
+
+# Per-GPU memory above this (MiB) blocks retry — stale contexts from a
+# failed run must drop before launching another server stack.
+_GPU_RETRY_MEM_MIB = 2048
+
+
+def _ensure_gpus_free(gpus_needed: int, timeout: int = 180) -> bool:
+    """Match CI omni-post-stage: kill GPU processes and wait for memory to drop."""
+    script = REPO_ROOT / ".github/scripts/delete_gpu_process.sh"
+    if script.exists():
+        subprocess.run(["bash", str(script)], capture_output=True, check=False)
+    for pattern in (
+        "sgl-omni serve",
+        "sglang_omni_router.serve",
+        "stage_process",
+        "pytest tests/test_model",
+    ):
+        subprocess.run(["pkill", "-9", "-f", pattern], check=False)
+    time.sleep(3)
+    waited = 0
+    while waited < timeout:
+        used = _gpu_memory_used_mib()
+        if used and all(m <= _GPU_RETRY_MEM_MIB for m in used):
+            print(f"  GPU memory cleared ({used} MiB) after {waited}s")
+            return True
+        time.sleep(5)
+        waited += 5
+    # Last resort: kill any remaining calibration python workers in this container.
+    subprocess.run(["pkill", "-9", "-f", "sgl-omni"], check=False)
+    time.sleep(5)
+    used = _gpu_memory_used_mib()
+    if used and all(m <= _GPU_RETRY_MEM_MIB for m in used):
+        print(f"  GPU memory cleared after forced pkill ({used} MiB)")
+        return True
+    print(f"  error: GPU not cleared after {timeout}s (mem={used} MiB) — "
+          f"aborting run (CI uses a fresh container per stage)")
+    return False
+
+
+def _stage_metrics_complete(stage, metrics):
+    """True when every metric with a json_path has a non-None value."""
+    stage_metrics = stage.get("metrics") or {}
+    if not stage_metrics:
+        return False
+    for _mk, meta in stage_metrics.items():
+        if meta.get("json_path") and metrics.get(_mk) is None:
+            return False
+    return True
+
+
+def _observation_status(stage, metrics, pytest_status, pytest_reason):
+    """Calibration treats a run as complete once metrics are extracted."""
+    if not stage.get("metrics"):
+        return pytest_status, pytest_reason
+    if not _stage_metrics_complete(stage, metrics):
+        return pytest_status, pytest_reason
+    if pytest_status == "ok":
+        return "ok", ""
+    return "ok", f"threshold_assertion ({pytest_reason})"
+
+
+def _run_json_ok(path: Path, stage=None) -> bool:
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    if data.get("status") == "ok":
+        return True
+    if stage is not None and _stage_metrics_complete(stage, data.get("metrics") or {}):
+        return True
+    return False
+
+
 def busy_gpu_indices():
     """GPU indices with any running compute app."""
     r = subprocess.run(["nvidia-smi", "--query-compute-apps=gpu_uuid",
@@ -735,7 +818,8 @@ def _run_cmd_inner(args, cfg, py, src, out):
     for k in range(1, args.repeats + 1):
         for test_path, stage_keys in by_test.items():
             if args.resume and all(
-                    (out / sk / f"run{k}.json").exists() for sk in stage_keys):
+                    _run_json_ok(out / sk / f"run{k}.json", all_stages[sk])
+                    for sk in stage_keys):
                 print(f"[{Path(test_path).stem}] run {k}/{args.repeats} "
                       f"skipped (resume, {len(stage_keys)} stage(s))")
                 continue
@@ -877,6 +961,9 @@ def _run_shared(test_path, stage_keys, all_stages, out, k, py, total, gpus_neede
     # extra_env is derived from test filename at discover — all stages
     # sharing a test file have identical extra_env; just use the first.
     env = os.environ.copy()
+    # Never inherit a shell-level CUDA_VISIBLE_DEVICES — CI gets a fresh
+    # container per stage; tune.py picks GPUs after cleanup instead.
+    env.pop("CUDA_VISIBLE_DEVICES", None)
     # Match CI's `export PYTHONPATH=$PWD`: server subprocesses launched by
     # tests are invoked as `python examples/<launcher>.py`, which only puts
     # `examples/` on sys.path. Prepend the repo root so local package imports
@@ -911,11 +998,14 @@ def _run_shared(test_path, stage_keys, all_stages, out, k, py, total, gpus_neede
     env.update(all_stages[stage_keys[0]].get("extra_env") or {})
     label = f"[{test_base}] run {k}/{total} ({len(stage_keys)} stage(s), needs {gpus_needed} GPU)"
     _print_run_banner(label, test_path, stage_keys, all_stages)
-    # Respect CUDA_VISIBLE_DEVICES if user set it; otherwise auto-pick.
-    auto_pick_gpus = "CUDA_VISIBLE_DEVICES" not in os.environ
-    attempts, status, reason, dur, text = 0, "ok", "", 0.0, ""
+    # Always auto-pick GPUs after _ensure_gpus_free (see env pop above).
+    auto_pick_gpus = True
+    attempts, status, reason, dur, text, pytest_rc = 0, "ok", "", 0.0, "", 0
     while attempts < 2:
         attempts += 1
+        if not _ensure_gpus_free(gpus_needed):
+            status, reason, dur = "failed", "GPU memory not released after cleanup", 0.0
+            break
         shutil.rmtree("/github/home/.cache/flashinfer", ignore_errors=True)
         # GPU process killing was removed: the skill should never kill
         # other users' processes. If GPUs are busy, pick_free_gpus()
@@ -964,17 +1054,21 @@ def _run_shared(test_path, stage_keys, all_stages, out, k, py, total, gpus_neede
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-            rc = pytest_proc.wait()
+            pytest_rc = pytest_proc.wait()
         _cleanup_after_pytest(test_path, pytest_proc.pid, basetemp)
+        _ensure_gpus_free(gpus_needed)  # best-effort post-run cleanup
         dur = time.monotonic() - t0
-        text = log.read_text()
-        if rc == 0:
+        text = log.read_text(errors="replace")
+        if pytest_rc == 0:
             status, reason = "ok", ""
             break
-        reason = _classify(text, rc)
+        reason = _classify(text, pytest_rc)
         status = "failed"
         if attempts == 1 and any(s in reason for s in RETRY_SIGS):
-            print(f"{label} {reason} — retrying once")
+            print(f"{label} {reason} — cleaning up GPUs before retry")
+            if not _ensure_gpus_free(gpus_needed):
+                break
+            print(f"{label} retrying once")
             continue
         break
     if status == "ok":
@@ -987,12 +1081,17 @@ def _run_shared(test_path, stage_keys, all_stages, out, k, py, total, gpus_neede
         sd = out / sk
         metrics = _extract(stage, basetemp, stage_key=sk, warnings=extraction_warnings)
         sample_counts = _extract_counts(stage, basetemp)
-        (sd / f"run{k}.json").write_text(json.dumps(dict(
-            status=status, reason=reason, metrics=metrics,
+        obs_status, obs_reason = _observation_status(
+            stage, metrics, status, reason)
+        run_payload = dict(
+            status=obs_status, reason=obs_reason, metrics=metrics,
             sample_counts=sample_counts,
             duration_s=round(dur, 2), attempts=attempts,
             pytest_log=str(log.resolve()),
-            basetemp=str(basetemp.resolve())), indent=2))
+            basetemp=str(basetemp.resolve()))
+        if stage.get("metrics"):
+            run_payload["pytest_rc"] = pytest_rc
+        (sd / f"run{k}.json").write_text(json.dumps(run_payload, indent=2))
         (sd / f"run{k}.log").write_text(
             f"# Shared pytest log (one invocation covered all stages from "
             f"{test_path}):\n# {log.resolve()}\n# basetemp: {basetemp.resolve()}\n")
@@ -1007,10 +1106,11 @@ def _run_shared(test_path, stage_keys, all_stages, out, k, py, total, gpus_neede
         if stage.get("metrics") and all(v is None for v in metrics.values()):
             print(f"  → {sk}: ⚠ ALL metrics None — likely config bug "
                   f"(check models/<M>/config.yaml metric_sources for {Path(test_path).name})")
-        if status == "ok":
-            print(f"  → {sk}: {brief or '(no metrics extracted)'}")
+        if obs_status == "ok":
+            note = (f" (pytest rc={pytest_rc})" if obs_reason else "")
+            print(f"  → {sk}: {brief or '(no metrics extracted)'}{note}")
         else:
-            print(f"  → {sk}: failed ({reason})"
+            print(f"  → {sk}: failed ({obs_reason or reason})"
                   + (f" — {brief}" if brief else ""))
     if extraction_warnings:
         print(f"  ⚠ metric extraction warnings ({len(extraction_warnings)}):")
