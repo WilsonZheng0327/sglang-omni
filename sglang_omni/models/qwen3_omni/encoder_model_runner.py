@@ -293,7 +293,18 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
         graph_key: Any,
         prepared: dict[str, Any],
     ) -> dict[str, Any]:
-        return self._copy_visual_graph_buffers(graph_key, prepared)
+        static_prepared = self._copy_visual_graph_buffers(graph_key, prepared)
+        with torch.no_grad(), envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.override(True):
+            self._forward_visual_graph_body(
+                hidden_states=static_prepared["hidden_states"],
+                cu_seqlens=static_prepared["cu_seqlens"],
+                position_embeddings=static_prepared["position_embeddings"],
+                graph_key=graph_key,
+                cu_seqlens_lengths=static_prepared["cu_seqlens_lengths"],
+                output_ws=static_prepared["output_ws"],
+            )
+        torch.cuda.synchronize()
+        return static_prepared
 
     def prepare_cuda_graph_replay(
         self,

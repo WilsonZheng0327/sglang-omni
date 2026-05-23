@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import types
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -31,6 +32,13 @@ _SKIPPED_VISUAL_WEIGHT_SUFFIXES = (
     "rotary_emb.sin_cached",
     "rotary_pos_emb.inv_freq",
 )
+
+
+@dataclass(frozen=True)
+class _SGLangVisionRuntimeState:
+    initialized_model_parallel: bool
+    attn_tp_size: int | None
+    attn_tp_rank: int | None
 
 
 def _patch_embed_forward(self: nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -112,7 +120,9 @@ def _vision_config_dict(vision_cfg: object) -> dict[str, object]:
     return values
 
 
-def _ensure_sglang_vision_runtime(model_path: str, *, device: str) -> None:
+def _ensure_sglang_vision_runtime(
+    model_path: str, *, device: str
+) -> _SGLangVisionRuntimeState:
     """Initialize the minimal SGLang runtime needed by VisionAttention."""
     from sglang.srt.distributed import parallel_state
     from sglang.srt.layers import dp_attention as dp
@@ -133,11 +143,16 @@ def _ensure_sglang_vision_runtime(model_path: str, *, device: str) -> None:
             )
         )
 
+    state = _SGLangVisionRuntimeState(
+        initialized_model_parallel=False,
+        attn_tp_size=getattr(dp, "_ATTN_TP_SIZE", None),
+        attn_tp_rank=getattr(dp, "_ATTN_TP_RANK", None),
+    )
     dp_tp_ready = (
         getattr(dp, "_ATTN_TP_SIZE", None) is not None and dp._ATTN_TP_SIZE > 0
     )
     if dp_tp_ready and parallel_state.model_parallel_is_initialized():
-        return
+        return state
 
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
     if "MASTER_PORT" not in os.environ:
@@ -154,9 +169,43 @@ def _ensure_sglang_vision_runtime(model_path: str, *, device: str) -> None:
             local_rank=0,
         )
         parallel_state.initialize_model_parallel()
+        state = _SGLangVisionRuntimeState(
+            initialized_model_parallel=True,
+            attn_tp_size=state.attn_tp_size,
+            attn_tp_rank=state.attn_tp_rank,
+        )
 
     dp._ATTN_TP_SIZE = 1
     dp._ATTN_TP_RANK = 0
+    return state
+
+
+def _restore_sglang_vision_runtime(state: _SGLangVisionRuntimeState) -> None:
+    if not state.initialized_model_parallel:
+        return
+
+    from sglang.srt.distributed import parallel_state
+    from sglang.srt.layers import dp_attention as dp
+
+    parallel_state.destroy_model_parallel()
+    dp._ATTN_TP_SIZE = state.attn_tp_size
+    dp._ATTN_TP_RANK = state.attn_tp_rank
+
+
+def _detach_sglang_visual_from_runtime(visual: nn.Module) -> None:
+    """Remove TP=1 runtime dependencies that are not needed after construction."""
+    pos_embed = getattr(visual, "pos_embed", None)
+    weight = getattr(pos_embed, "weight", None)
+    if not isinstance(weight, torch.nn.Parameter):
+        return
+
+    embedding = nn.Embedding(
+        weight.shape[0],
+        weight.shape[1],
+        dtype=weight.dtype,
+        device=weight.device,
+    )
+    visual.pos_embed = embedding
 
 
 def _mapped_sglang_visual_weight_name(name: str) -> tuple[str, str | None]:
@@ -225,10 +274,14 @@ def _build_visual(
     device: str,
 ) -> nn.Module:
     vision_cfg = thinker_cfg.vision_config
-    _ensure_sglang_vision_runtime(model_path, device=device)
+    runtime_state = _ensure_sglang_vision_runtime(model_path, device=device)
     visual_config = Qwen3OmniMoeVisionEncoderConfig(**_vision_config_dict(vision_cfg))
-    visual = VISUAL_CLASS(visual_config)
-    visual.config = visual_config
+    try:
+        visual = VISUAL_CLASS(visual_config)
+        visual.config = visual_config
+        _detach_sglang_visual_from_runtime(visual)
+    finally:
+        _restore_sglang_vision_runtime(runtime_state)
     state_dict = load_weights_by_prefix(
         model_path,
         prefix=VISUAL_PREFIX,
