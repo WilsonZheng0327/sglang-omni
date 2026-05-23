@@ -300,6 +300,60 @@ def test_qwen_aux_hidden_states_keep_single_request_prefill_rows():
     )
 
 
+def test_qwen_aux_hidden_states_slice_zero_len_mixed_prefill_rows():
+    model = SimpleNamespace(
+        _captured_aux_hidden_states=[
+            torch.arange(4, dtype=torch.float32).reshape(2, 2),
+            torch.arange(40, 44, dtype=torch.float32).reshape(2, 2),
+        ]
+    )
+    output_processor = SGLangOutputProcessor(
+        capture_hidden=True,
+        capture_hidden_layers=[0, 24],
+        model=model,
+        should_emit_hidden=lambda _request: True,
+    )
+    scheduler_output = SchedulerOutput(
+        requests=[
+            SchedulerRequest(request_id="cached"),
+            SchedulerRequest(request_id="audio"),
+        ],
+        batch_data=SimpleNamespace(
+            reqs=[
+                SimpleNamespace(extend_input_len=0),
+                SimpleNamespace(extend_input_len=2),
+            ]
+        ),
+    )
+    model_output = SimpleNamespace(
+        next_token_ids=torch.tensor([11, 22]),
+        logits_output=SimpleNamespace(
+            hidden_states=torch.arange(100, 104, dtype=torch.float32).reshape(2, 2)
+        ),
+    )
+
+    outputs = output_processor.process(model_output, scheduler_output)
+
+    cached_hidden = outputs["cached"].extra["hidden_states"]
+    assert cached_hidden["embed"].shape == (0, 2)
+    assert cached_hidden[24].shape == (0, 2)
+    assert outputs["cached"].extra["stream_hidden_states"].shape == (0, 2)
+
+    audio_hidden = outputs["audio"].extra["hidden_states"]
+    assert torch.equal(
+        audio_hidden["embed"],
+        torch.arange(4, dtype=torch.float32).reshape(2, 2),
+    )
+    assert torch.equal(
+        audio_hidden[24],
+        torch.arange(40, 44, dtype=torch.float32).reshape(2, 2),
+    )
+    assert torch.equal(
+        outputs["audio"].extra["stream_hidden_states"],
+        torch.arange(100, 104).reshape(2, 2),
+    )
+
+
 def test_qwen_aux_hidden_states_clone_only_audio_request_slice():
     model = SimpleNamespace(
         _captured_aux_hidden_states=[
