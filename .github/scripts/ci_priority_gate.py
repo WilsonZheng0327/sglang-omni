@@ -171,9 +171,7 @@ def main() -> int:
     token = os.environ["GITHUB_TOKEN"]
     current_run_id = int(os.environ["GITHUB_RUN_ID"])
     run_label = os.environ.get("OMNI_CI_RUN_LABEL", "run-ci")
-    high_priority_label = os.environ.get(
-        "OMNI_CI_HIGH_PRIORITY_LABEL", "high-priority"
-    )
+    high_priority_label = os.environ.get("OMNI_CI_HIGH_PRIORITY_LABEL", "high-priority")
     poll_seconds = _env_int("OMNI_CI_PRIORITY_POLL_SECONDS", 30)
     timeout_seconds = _env_int("OMNI_CI_PRIORITY_TIMEOUT_SECONDS", 6 * 60 * 60)
     workflows = _priority_workflows()
@@ -204,7 +202,9 @@ def main() -> int:
             return 1
 
         if not active_runs:
-            print("No active high-priority CI runs found; normal-priority CI can start.")
+            print(
+                "No active high-priority CI runs found; normal-priority CI can start."
+            )
             return 0
 
         print("Waiting for active high-priority CI runs:")
