@@ -206,7 +206,10 @@ def test_qwen_thinker_stream_builder_carries_prefill_prompt_states():
     talker_msg = [msg for msg in messages if msg.target == "talker_ar"][0]
 
     assert "prefill_embed" not in talker_msg.metadata
-    assert torch.equal(talker_msg.metadata["prefill_layer_hidden"], prefill_hidden)
+    captured_hidden = talker_msg.metadata["prefill_layer_hidden"]
+    assert captured_hidden.device.type == "cpu"
+    assert captured_hidden.data_ptr() != prefill_hidden.data_ptr()
+    assert torch.equal(captured_hidden, prefill_hidden)
     assert talker_msg.metadata["prefill_offset"] == 2
 
 

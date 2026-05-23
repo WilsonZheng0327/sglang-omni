@@ -858,7 +858,9 @@ def make_thinker_stream_output_builder():
             and layer_hidden.ndim == 2
             and layer_hidden.shape[0] > 1
         ):
-            metadata["prefill_layer_hidden"] = layer_hidden.detach().clone()
+            metadata["prefill_layer_hidden"] = layer_hidden.detach().to(
+                device="cpu", copy=True
+            )
         if metadata:
             metadata["prefill_offset"] = _prefill_prompt_offset(req_data)
         return metadata
