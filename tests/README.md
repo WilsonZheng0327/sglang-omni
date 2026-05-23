@@ -10,8 +10,8 @@ tests/
 │   └── s2pro/
 ├── test_model/
 │   ├── conftest.py
-│   ├── test_omni_router_ci.py
 │   ├── test_qwen3_omni_*_ci.py
+│   ├── test_qwen3_omni_videoamme_talker_tp2_ci.py
 │   └── test_s2pro_tts_ci.py
 └── unit_test/
     ├── fixtures/
@@ -33,13 +33,22 @@ tests/
     │   ├── test_stage_process_env.py
     │   └── test_stage_streaming.py
     ├── qwen3_omni/
+    │   ├── test_cli.py
     │   ├── test_code2wav.py
     │   ├── test_colocation_config.py
     │   ├── test_config_manager.py
+    │   ├── test_example_launcher.py
+    │   ├── test_logit_shaping.py
     │   ├── test_pipeline.py
     │   ├── test_sglang_ar_budget.py
     │   ├── test_streaming.py
     │   └── test_talker.py
+    ├── ming_omni/
+    │   ├── test_pipeline.py
+    │   ├── test_talker.py
+    │   ├── test_thinker.py
+    │   ├── test_tokenizer.py
+    │   └── test_tp.py
     ├── router/
     │   ├── test_app.py
     │   └── test_core.py
@@ -126,11 +135,10 @@ pytest tests/test_model -m benchmark -v -s
 
 Relevant model CI ownership:
 
-- `qwen3_omni_thinker_server` / `qwen3_omni_talker_server`: start a real
-  Qwen3-Omni server and yield a `ServerHandle` from `conftest.py`.
-- `test_omni_router_ci.py`: starts two colocated Qwen3-Omni workers behind the
-  router and gates the full client-to-router-to-worker SeedTTS path, including
-  per-worker traffic, speed, and WER.
+- `qwen3_omni_thinker_server` / `qwen3_omni_talker_server`: expose the shared
+  router-backed Qwen3-Omni endpoint from `conftest.py`.
+- `test_qwen3_omni_tts_ci.py`: gates the SeedTTS speed/WER path through the
+  router and verifies both colocated workers receive traffic.
 - `qwen3_omni_vision_sglang_env`: session-scoped SGLang dist + DP-attention
   init from `conftest.py`, shared by every Qwen3-Omni vision-encoder benchmark
   module — avoids re-initializing the process-global TP group when the combined
@@ -176,12 +184,29 @@ that happened to contain an older version of the test.
 - `unit_test/qwen3_omni/` Qwen3-Omni unit tests:
 
   - public CLI/config behavior
+  - example launcher config contract (TP/GPU/mem-fraction overrides)
   - SGLang argument builders
   - memory flag contracts
   - colocation config and SGLang AR budget contracts
   - `PipelineState` request builders
-  - talker behavior
-  - Code2Wav streaming/cleanup behavior.
+  - talker behavior, including projected prefill tensor storage/slicing, decode
+    feedback/text FIFO consumption, and replay of generated-token input embeds
+    after decode retract
+  - Code2Wav streaming/cleanup behavior
+  - logit-shaping helpers (e.g. repetition penalty) numerical equivalence with the original per-row scalar formulas.
+
+- `unit_test/ming_omni/` Ming-Omni unit tests:
+
+  - text + speech pipeline config and stage schema
+  - launcher argparse, GPU placement, and TP wiring
+  - stage factory and scheduler contracts (preprocessing, encoders, thinker, talker, decode)
+  - thinker bootstrap registration and Ming model runner wiring
+  - multimodal embed injection (per-modality consumed state, pad-value fallback, short-embeds detection)
+  - image/vision encoder TP context preservation
+  - audio/image preprocessor placeholder construction and cache-key plumbing
+  - talker executor request gating and result-builder modality merging
+  - Bailing tokenizer loader fallback for vocab compatibility
+  - TP topology validation (rank-specific stage specs, talker/thinker GPU collision detection, server_args alignment before infra init).
 
 - `unit_test/router/`: SGLang-Omni Router unit tests:
   - router CLI/config behavior
