@@ -134,6 +134,7 @@ class Qwen3OmniImageEncoder(nn.Module):
         self.visual_dtype_bytes = torch.empty(
             (), dtype=self.visual.dtype
         ).element_size()
+        self.eval()
 
     def forward(
         self,
