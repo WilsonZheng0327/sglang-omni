@@ -194,6 +194,7 @@ def create_image_encoder_executor(
     device: str = "cuda",
     dtype: str | None = None,
     enable_cuda_graph: bool = True,
+    keep_sglang_vision_runtime: bool = True,
     cuda_graph_token_budgets: tuple[int, ...] | None = None,
     cuda_graph_sequence_budgets: tuple[int, ...] | None = None,
     cuda_graph_max_sequence_token_budgets: tuple[int, ...] | None = None,
@@ -202,7 +203,12 @@ def create_image_encoder_executor(
 ):
     from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 
-    model = Qwen3OmniImageEncoder(model_path=model_path, device=device, dtype=dtype)
+    model = Qwen3OmniImageEncoder(
+        model_path=model_path,
+        device=device,
+        dtype=dtype,
+        keep_sglang_vision_runtime=keep_sglang_vision_runtime,
+    )
     cache = StageOutputCache(
         max_size=QWEN3_ENCODER_CACHE_MAX_ENTRIES,
         max_bytes=QWEN3_ENCODER_CACHE_MAX_BYTES,

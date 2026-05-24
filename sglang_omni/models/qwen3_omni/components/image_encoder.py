@@ -291,6 +291,7 @@ def _build_visual(
     thinker_cfg: object,
     torch_dtype: torch.dtype | None,
     device: str,
+    keep_sglang_vision_runtime: bool,
 ) -> nn.Module:
     vision_cfg = thinker_cfg.vision_config
     runtime_state = _ensure_sglang_vision_runtime(model_path, device=device)
@@ -300,7 +301,8 @@ def _build_visual(
         visual.config = visual_config
         _detach_sglang_visual_from_runtime(visual)
     finally:
-        _restore_sglang_vision_runtime(runtime_state)
+        if not keep_sglang_vision_runtime:
+            _restore_sglang_vision_runtime(runtime_state)
     state_dict = load_weights_by_prefix(
         model_path,
         prefix=VISUAL_PREFIX,
@@ -329,6 +331,7 @@ class Qwen3OmniImageEncoder(nn.Module):
         *,
         device: str = "cuda",
         dtype: str | torch.dtype | None = None,
+        keep_sglang_vision_runtime: bool = True,
     ) -> None:
         super().__init__()
         torch_dtype = resolve_dtype(dtype)
@@ -340,6 +343,7 @@ class Qwen3OmniImageEncoder(nn.Module):
             thinker_cfg=thinker_cfg,
             torch_dtype=torch_dtype,
             device=device,
+            keep_sglang_vision_runtime=keep_sglang_vision_runtime,
         )
         self.spatial_merge_size = int(vision_cfg.spatial_merge_size)
         self.out_hidden_size = int(vision_cfg.out_hidden_size)
