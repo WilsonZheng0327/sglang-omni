@@ -106,6 +106,25 @@ def _optimize_patch_embed(visual: nn.Module) -> None:
     )
 
 
+def _sync_visual_graph_runner(visual: nn.Module) -> None:
+    graph_runners = getattr(visual, "graph_runners", None)
+    if graph_runners is None:
+        try:
+            from sglang.srt.multimodal.vit_cuda_graph_runner import ViTCudaGraphRunner
+
+            graph_runners = ViTCudaGraphRunner(visual)
+            visual.graph_runners = graph_runners
+        except Exception as exc:
+            logger.debug("Skipping Qwen3-Omni visual graph runner setup: %s", exc)
+            return
+    if graph_runners is None:
+        return
+    if hasattr(visual, "deepstack_visual_indexes"):
+        graph_runners._deepstack_visual_indexes = list(visual.deepstack_visual_indexes)
+    if hasattr(visual, "deepstack_merger_list"):
+        graph_runners._deepstack_merger_list = visual.deepstack_merger_list
+
+
 def _vision_config_dict(vision_cfg: object) -> dict[str, object]:
     if hasattr(vision_cfg, "to_dict"):
         values = vision_cfg.to_dict()
@@ -292,6 +311,7 @@ def _build_visual(
     visual.to(device=device, dtype=torch_dtype)
     visual.eval()
     _optimize_patch_embed(visual)
+    _sync_visual_graph_runner(visual)
     logger.info(
         "Loaded Qwen3-Omni visual encoder with SGLang VisionAttention backend "
         "(%d tensors)",

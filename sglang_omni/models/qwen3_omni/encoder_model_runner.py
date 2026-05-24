@@ -29,12 +29,29 @@ from sglang_omni.scheduling.stage_cache import StageOutputCache
 
 QWEN3_IMAGE_ENCODER_ACTIVATION_MULTIPLIER = 5
 QWEN3_VISION_CUDA_GRAPH_TOKEN_BUDGETS = (
+    256,
+    384,
+    512,
+    640,
+    768,
+    896,
     1024,
+    1280,
+    1536,
+    1792,
     2048,
+    2560,
+    3072,
+    3584,
     4096,
+    5120,
+    6144,
     8192,
+    12288,
     16384,
+    24576,
     32768,
+    49152,
     65536,
 )
 QWEN3_VISION_CUDA_GRAPH_SEQUENCE_BUDGETS = (2, 4, 8, 16, 32, 64, 128, 256)
@@ -116,6 +133,7 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
         self.cuda_graph_max_graphs = int(cuda_graph_max_graphs)
         self.cuda_graph_max_buffer_bytes = int(cuda_graph_max_buffer_bytes)
         self.cuda_graph_fallback_reasons: dict[str, int] = {}
+        self.native_visual_graph_budgets: set[QwenVisionCudaGraphBudget] = set()
 
     def is_batchable(self, request: Any) -> bool:
         if self.request_skip_result(request) is not None:
@@ -202,11 +220,11 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
 
         model_inputs: dict[str, Any] = {}
         if image_pixels:
-            model_inputs["pixel_values"] = torch.cat(image_pixels, dim=0)
-            model_inputs["image_grid_thw"] = torch.cat(image_grids, dim=0)
+            model_inputs["pixel_values"] = _cat_or_single(image_pixels, dim=0)
+            model_inputs["image_grid_thw"] = _cat_or_single(image_grids, dim=0)
         if video_pixels:
-            model_inputs["pixel_values_videos"] = torch.cat(video_pixels, dim=0)
-            model_inputs["video_grid_thw"] = torch.cat(video_grids, dim=0)
+            model_inputs["pixel_values_videos"] = _cat_or_single(video_pixels, dim=0)
+            model_inputs["video_grid_thw"] = _cat_or_single(video_grids, dim=0)
 
         return {"model_inputs": model_inputs, "metas": metas}
 
@@ -427,12 +445,15 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
             return False
 
         new_budgets = {
-            budget for _, budget in graph_key if budget not in self.cuda_graphs
+            budget
+            for _, budget in graph_key
+            if not self._visual_graph_budget_is_captured(budget)
         }
         if (
             new_budgets
             and self.cuda_graph_max_graphs > 0
-            and len(self.cuda_graphs) + len(new_budgets) > self.cuda_graph_max_graphs
+            and self._visual_graph_count() + len(new_budgets)
+            > self.cuda_graph_max_graphs
         ):
             self._record_visual_graph_fallback("max_graphs")
             return False
@@ -489,6 +510,18 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
         device = next(self.model.visual.parameters()).device
         dtype = next(self.model.visual.parameters()).dtype
         attention_impl = self._visual_attention_impl()
+        exact_budget = QwenVisionCudaGraphBudget(
+            mode="exact",
+            token_budget=actual_tokens,
+            sequence_budget=actual_sequences,
+            max_sequence_token_budget=actual_max_sequence_tokens,
+            dtype=str(dtype),
+            device=str(device),
+            attention_impl=attention_impl,
+            exact_cu_seqlens=_exact_visual_cu_seqlens_tuple(grid_thw),
+        )
+        if self._can_select_native_visual_budget(exact_budget):
+            return exact_budget
 
         for token_budget in self.cuda_graph_token_budgets:
             if token_budget < actual_tokens:
@@ -632,6 +665,37 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
             total += nested_tensor_bytes(store)
         return total
 
+    def _visual_graph_count(self) -> int:
+        graph_runners = getattr(self.model.visual, "graph_runners", None)
+        native_graphs = len(getattr(graph_runners, "block_graphs", {}))
+        return len(self.cuda_graphs) + native_graphs
+
+    def _visual_graph_budget_is_captured(
+        self,
+        budget: QwenVisionCudaGraphBudget,
+    ) -> bool:
+        if budget in self.cuda_graphs or budget in self.native_visual_graph_budgets:
+            return True
+        if budget.mode != "exact":
+            return False
+        graph_runners = getattr(self.model.visual, "graph_runners", None)
+        return budget.token_budget in getattr(graph_runners, "block_graphs", {})
+
+    def _can_select_native_visual_budget(
+        self,
+        budget: QwenVisionCudaGraphBudget,
+    ) -> bool:
+        if budget.mode != "exact" or budget.sequence_budget != 1:
+            return False
+        if not self._native_visual_graph_available():
+            return False
+        if self._visual_graph_budget_is_captured(budget):
+            return True
+        return (
+            self.cuda_graph_max_graphs <= 0
+            or self._visual_graph_count() < self.cuda_graph_max_graphs
+        )
+
     def _record_visual_graph_fallback(self, reason: str) -> None:
         self.cuda_graph_stats.fallbacks += 1
         self.cuda_graph_fallback_reasons[reason] = (
@@ -644,6 +708,17 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
         grid_thw: torch.Tensor,
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         prepared = self._prepare_visual_graph_inputs(pixel_values, grid_thw)
+        if self._can_run_native_visual_graph(prepared):
+            graph_output = self._run_native_visual_graph(prepared)
+            output_tokens = int(prepared["output_tokens"])
+            return (
+                graph_output["embeds"][:output_tokens].clone(),
+                [
+                    tensor[:output_tokens].clone()
+                    for tensor in graph_output["deepstack"]
+                ],
+            )
+
         graph_output = self.run_cuda_graph_piece(prepared["graph_key"], prepared)
         output_tokens = int(prepared["output_tokens"])
 
@@ -653,6 +728,101 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
             graph_output["embeds"][:output_tokens].clone(),
             [tensor[:output_tokens].clone() for tensor in graph_output["deepstack"]],
         )
+
+    def _can_run_native_visual_graph(self, prepared: dict[str, Any]) -> bool:
+        graph_key = prepared["graph_key"]
+        if graph_key.token_budget != int(prepared["actual_tokens"]):
+            return False
+        if graph_key.sequence_budget != int(prepared["actual_sequences"]):
+            return False
+        if graph_key.max_sequence_token_budget != int(
+            prepared["actual_max_sequence_tokens"]
+        ):
+            return False
+        return self._native_visual_graph_available()
+
+    def _native_visual_graph_available(self) -> bool:
+        graph_runners = getattr(self.model.visual, "graph_runners", None)
+        if graph_runners is None or not hasattr(graph_runners, "run"):
+            return False
+
+        try:
+            from sglang.srt.server_args import get_global_server_args
+
+            backend = get_global_server_args().mm_attention_backend
+        except Exception:
+            return False
+        return backend in ("fa3", "triton_attn")
+
+    def _run_native_visual_graph(self, prepared: dict[str, Any]) -> dict[str, Any]:
+        visual = self.model.visual
+        graph_runners = visual.graph_runners
+        graph_key = int(prepared["actual_tokens"])
+        had_graph = graph_key in getattr(graph_runners, "block_graphs", {})
+
+        if not had_graph:
+            self.cuda_graph_stats.misses += 1
+            self._warm_up_native_visual_graph_body(prepared)
+
+        rotary_pos_emb_cos, rotary_pos_emb_sin = prepared["position_embeddings"]
+        with envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.override(True):
+            visual_output = graph_runners.run(
+                x=prepared["hidden_states"],
+                position_embeddings=None,
+                rotary_pos_emb_cos=rotary_pos_emb_cos,
+                rotary_pos_emb_sin=rotary_pos_emb_sin,
+                cu_seqlens=prepared["cu_seqlens"],
+                cu_window_seqlens=None,
+                output_indices=None,
+            )
+
+        if had_graph:
+            self.cuda_graph_stats.hits += 1
+        else:
+            self.cuda_graph_stats.captures += 1
+
+        self.native_visual_graph_budgets.add(prepared["graph_key"])
+        embeds, deepstack = self.model._split_visual_output(visual_output)
+        return {"embeds": embeds, "deepstack": deepstack}
+
+    def _warm_up_native_visual_graph_body(self, prepared: dict[str, Any]) -> None:
+        hidden_states = prepared["hidden_states"].unsqueeze(1)
+        rotary_pos_emb_cos, rotary_pos_emb_sin = prepared["position_embeddings"]
+        cu_seqlens = prepared["cu_seqlens"]
+        max_seqlen = int(prepared["actual_max_sequence_tokens"])
+        cu_seqlens_arg: Any
+        if prepared["graph_key"].attention_impl == "VisionTritonAttention":
+            cu_seqlens_arg = [
+                cu_seqlens,
+                cu_seqlens[1:] - cu_seqlens[:-1],
+                max_seqlen,
+            ]
+        else:
+            cu_seqlens_arg = [cu_seqlens, max_seqlen]
+
+        visual = self.model.visual
+        deepstack_features: list[torch.Tensor] = []
+        deepstack_index_by_layer = {
+            int(layer_idx): idx
+            for idx, layer_idx in enumerate(visual.deepstack_visual_indexes)
+        }
+        with torch.no_grad(), envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.override(True):
+            for layer_num, block in enumerate(visual.blocks):
+                hidden_states = block(
+                    hidden_states,
+                    cu_seqlens=cu_seqlens_arg,
+                    rotary_pos_emb_cos=rotary_pos_emb_cos,
+                    rotary_pos_emb_sin=rotary_pos_emb_sin,
+                )
+                deepstack_idx = deepstack_index_by_layer.get(layer_num)
+                if deepstack_idx is not None:
+                    deepstack_features.append(
+                        visual.deepstack_merger_list[deepstack_idx](hidden_states)
+                    )
+            visual.merger(hidden_states)
+            for feature in deepstack_features:
+                feature.sum()
+        torch.cuda.synchronize()
 
     def _prepare_visual_forward_inputs(
         self,
@@ -702,6 +872,10 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
         hidden_states = visual_inputs["hidden_states"]
         position_embeddings = visual_inputs["position_embeddings"]
         actual_tokens = int(hidden_states.shape[0])
+        grid_stats = _visual_grid_stats(grid_thw.to(dtype=torch.long))
+        if grid_stats is None:
+            raise RuntimeError("Invalid visual grid for CUDA graph inputs")
+        _, actual_sequences, actual_max_sequence_tokens = grid_stats
         output_tokens = actual_tokens // (self.model.spatial_merge_size**2)
         cu_seqlens = self._build_budgeted_cu_seqlens(
             grid_thw=grid_thw.to(dtype=torch.long),
@@ -714,6 +888,8 @@ class Qwen3OmniImageEncoderModelRunner(Qwen3OmniEncoderModelRunner):
             "cu_seqlens": cu_seqlens.contiguous(),
             "position_embeddings": position_embeddings,
             "actual_tokens": actual_tokens,
+            "actual_sequences": actual_sequences,
+            "actual_max_sequence_tokens": actual_max_sequence_tokens,
             "output_tokens": output_tokens,
         }
 
@@ -962,6 +1138,12 @@ def _sorted_unique_budgets(
             f"CUDA graph budgets {budgets} must be divisible by {multiple}"
         )
     return budgets
+
+
+def _cat_or_single(tensors: list[torch.Tensor], *, dim: int) -> torch.Tensor:
+    if len(tensors) == 1:
+        return tensors[0]
+    return torch.cat(tensors, dim=dim)
 
 
 def _visual_grid_stats(grid_thw: torch.Tensor) -> tuple[int, int, int] | None:
