@@ -18,6 +18,7 @@ import torch
 
 from sglang_omni.proto import DataReadyMessage, StagePayload
 from sglang_omni.relay.base import Relay
+from sglang_omni.utils.cuda_capture import cuda_capture_guard
 
 
 def _dtype_alignment(dtype: torch.dtype) -> int:
@@ -100,6 +101,9 @@ async def write_payload(
     transport_device = torch.device(device)
 
     modified_data, tensor_dict = extract_tensors(payload.data)
+    needs_cuda_guard = transport_device.type == "cuda" or any(
+        tensor.is_cuda for tensor in tensor_dict.values()
+    )
     payload_no_tensors = StagePayload(
         request_id=payload.request_id,
         request=payload.request,
@@ -108,36 +112,42 @@ async def write_payload(
     metadata_bytes = pickle.dumps(payload_no_tensors)
 
     if tensor_dict:
-        tensor_buffers = []
-        tensor_info = []
-        offset = 0
-        for path, tensor in tensor_dict.items():
-            flat = tensor.contiguous().view(torch.uint8).reshape(-1)
-            if flat.device != transport_device:
-                flat = flat.to(device=transport_device)
-            padding = _pad_offset(offset, _dtype_alignment(tensor.dtype))
-            if padding:
-                tensor_buffers.append(
-                    torch.zeros(padding, dtype=torch.uint8, device=transport_device)
+        with cuda_capture_guard(needs_cuda_guard):
+            tensor_buffers = []
+            tensor_info = []
+            offset = 0
+            for path, tensor in tensor_dict.items():
+                flat = tensor.contiguous().view(torch.uint8).reshape(-1)
+                if flat.device != transport_device:
+                    flat = flat.to(device=transport_device)
+                padding = _pad_offset(offset, _dtype_alignment(tensor.dtype))
+                if padding:
+                    tensor_buffers.append(
+                        torch.zeros(padding, dtype=torch.uint8, device=transport_device)
+                    )
+                    offset += padding
+                tensor_buffers.append(flat)
+                tensor_info.append(
+                    {
+                        "path": path,
+                        "shape": list(tensor.shape),
+                        "dtype": str(tensor.dtype),
+                        "offset": offset,
+                        "size": flat.numel(),
+                    }
                 )
-                offset += padding
-            tensor_buffers.append(flat)
-            tensor_info.append(
-                {
-                    "path": path,
-                    "shape": list(tensor.shape),
-                    "dtype": str(tensor.dtype),
-                    "offset": offset,
-                    "size": flat.numel(),
-                }
-            )
-            offset += flat.numel()
-        all_tensors = torch.cat(tensor_buffers)
+                offset += flat.numel()
+            all_tensors = torch.cat(tensor_buffers)
     else:
-        all_tensors = torch.zeros(1, dtype=torch.uint8, device=device)
+        with cuda_capture_guard(transport_device.type == "cuda"):
+            all_tensors = torch.zeros(1, dtype=torch.uint8, device=device)
         tensor_info = []
 
-    op = await relay.put_async(all_tensors, request_id=request_id)
+    if transport_device.type == "cuda":
+        with cuda_capture_guard():
+            op = await relay.put_async(all_tensors, request_id=request_id)
+    else:
+        op = await relay.put_async(all_tensors, request_id=request_id)
 
     return {
         "relay_info": op.metadata,
@@ -162,11 +172,13 @@ async def read_payload(
     tensor_dict = {}
 
     data_size = relay_info["transfer_info"]["size"]
-    recv_tensor = torch.zeros(data_size, dtype=torch.uint8, device=device)
-    op = await relay.get_async(
-        metadata=relay_info, dest_tensor=recv_tensor, request_id=request_id
-    )
-    await op.wait_for_completion()
+    transport_device = torch.device(device)
+    with cuda_capture_guard(transport_device.type == "cuda"):
+        recv_tensor = torch.zeros(data_size, dtype=torch.uint8, device=device)
+        op = await relay.get_async(
+            metadata=relay_info, dest_tensor=recv_tensor, request_id=request_id
+        )
+        await op.wait_for_completion()
 
     if tensor_info:
         for info in tensor_info:
@@ -201,19 +213,25 @@ async def write_blob(
     tensor: torch.Tensor,
 ) -> tuple[dict[str, Any], Any]:
     """Write a raw tensor to relay. Returns (metadata, relay_op)."""
-    flat = tensor.contiguous().view(torch.uint8).reshape(-1)
     transport_device = torch.device(getattr(relay, "device", "cpu"))
-    if flat.device != transport_device:
-        flat = flat.to(device=transport_device)
-    padding = _pad_offset(0, _dtype_alignment(tensor.dtype))
-    if padding:
-        flat = torch.cat(
-            [
-                torch.zeros(padding, dtype=torch.uint8, device=transport_device),
-                flat,
-            ]
-        )
-    op = await relay.put_async(flat, request_id=key)
+    needs_cuda_guard = transport_device.type == "cuda" or tensor.is_cuda
+    with cuda_capture_guard(needs_cuda_guard):
+        flat = tensor.contiguous().view(torch.uint8).reshape(-1)
+        if flat.device != transport_device:
+            flat = flat.to(device=transport_device)
+        padding = _pad_offset(0, _dtype_alignment(tensor.dtype))
+        if padding:
+            flat = torch.cat(
+                [
+                    torch.zeros(padding, dtype=torch.uint8, device=transport_device),
+                    flat,
+                ]
+            )
+    if transport_device.type == "cuda":
+        with cuda_capture_guard():
+            op = await relay.put_async(flat, request_id=key)
+    else:
+        op = await relay.put_async(flat, request_id=key)
     metadata = {
         "relay_info": op.metadata,
         "tensor_shape": list(tensor.shape),
@@ -236,11 +254,13 @@ async def read_blob(
     offset = int(metadata.get("tensor_offset", 0))
 
     data_size = relay_info["transfer_info"]["size"]
-    recv_buf = torch.zeros(data_size, dtype=torch.uint8, device=device)
-    op = await relay.get_async(
-        metadata=relay_info, dest_tensor=recv_buf, request_id=key
-    )
-    await op.wait_for_completion()
+    transport_device = torch.device(device)
+    with cuda_capture_guard(transport_device.type == "cuda"):
+        recv_buf = torch.zeros(data_size, dtype=torch.uint8, device=device)
+        op = await relay.get_async(
+            metadata=relay_info, dest_tensor=recv_buf, request_id=key
+        )
+        await op.wait_for_completion()
 
     dtype = getattr(torch, dtype_str.replace("torch.", ""))
     return recv_buf[offset:].view(dtype).reshape(shape)

@@ -12,6 +12,7 @@ import torch
 
 from sglang_omni.proto import StagePayload
 from sglang_omni.scheduling.stage_cache import StageOutputCache
+from sglang_omni.utils.cuda_capture import cuda_capture_guard
 
 logger = logging.getLogger(__name__)
 
@@ -271,11 +272,12 @@ class EncoderModelRunner:
         self.cuda_graph_static_inputs[graph_key] = static_prepared
 
         graph = torch.cuda.CUDAGraph()
-        torch.cuda.synchronize()
-        with torch.cuda.graph(graph):
-            self.cuda_graph_output_buffers[graph_key] = self.forward_cuda_graph_capture(
-                graph_key, static_prepared
-            )
+        with cuda_capture_guard():
+            torch.cuda.synchronize()
+            with torch.cuda.graph(graph):
+                self.cuda_graph_output_buffers[graph_key] = (
+                    self.forward_cuda_graph_capture(graph_key, static_prepared)
+                )
         self.cuda_graphs[graph_key] = graph
         self.cuda_graph_stats.captures += 1
         logger.info(
