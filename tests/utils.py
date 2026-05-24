@@ -43,8 +43,9 @@ class MetricCheckCollector:
 
     def check_assertion(
         self,
-        label: str,
+        check_label: str,
         func: Callable,
+        /,
         *args,
         **kwargs,
     ) -> None:
@@ -52,7 +53,7 @@ class MetricCheckCollector:
             func(*args, **kwargs)
         except AssertionError as exc:
             detail = str(exc) or exc.__class__.__name__
-            self.fail(f"{label}: {detail}")
+            self.fail(f"{check_label}: {detail}")
 
     def assert_all(self) -> None:
         if not self.failures:
