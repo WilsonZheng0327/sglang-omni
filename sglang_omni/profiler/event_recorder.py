@@ -162,7 +162,7 @@ class RequestEventRecorder:
             try:
                 self._fp.flush()
                 self._fp.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - ignore close failure.
                 logger.warning(
                     "RequestEventRecorder failed to close cleanly", exc_info=True
                 )
@@ -207,7 +207,7 @@ class RequestEventRecorder:
             try:
                 fp.write(json.dumps(event.to_dict(), default=_json_default))
                 fp.write("\n")
-            except Exception:
+            except Exception:  # noqa: BLE001 - drop bad events.
                 self._dropped += 1
                 if self._dropped == 1:
                     logger.warning(
@@ -237,7 +237,7 @@ def _json_default(obj: Any) -> Any:
             pass
         try:
             shape_list: Any = [int(d) for d in shape]
-        except Exception:
+        except Exception:  # noqa: BLE001 - shape falls back to repr.
             shape_list = repr(shape)
         device = getattr(obj, "device", None)
         return {

@@ -57,7 +57,7 @@ class TorchProfiler(ProfilerBase):
                 )
                 try:
                     cls._profiler.stop()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - restart after stop error.
                     logger.warning(
                         "[Rank %s] Failed to stop existing profiler: %s", rank, e
                     )
@@ -97,12 +97,12 @@ class TorchProfiler(ProfilerBase):
                         )
                         # Update variable to point to the eventual file
                         json_file = f"{json_file}.gz"
-                    except Exception as compress_err:
+                    except Exception as compress_err:  # noqa: BLE001 - gzip optional.
                         logger.warning(
                             f"[Rank {rank}] Background gzip failed to start: {compress_err}"
                         )
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - trace is diagnostic.
                     logger.warning(f"[Rank {rank}] Failed to export trace: {e}")
 
             # No ``schedule``: record continuously between start/stop.
@@ -156,7 +156,7 @@ class TorchProfiler(ProfilerBase):
             profiler = cls._profiler
             try:
                 profiler.stop()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - clear active state.
                 logger.warning("[Rank %s] Profiler stop failed: %s", rank, e)
 
             # No schedule → on_trace_ready isn't fired on stop, so
@@ -172,13 +172,13 @@ class TorchProfiler(ProfilerBase):
                         rank,
                         json_path,
                     )
-                except Exception as compress_err:
+                except Exception as compress_err:  # noqa: BLE001 - gzip optional.
                     logger.warning(
                         "[Rank %s] Background gzip failed: %s",
                         rank,
                         compress_err,
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - trace is diagnostic.
                 logger.warning("[Rank %s] Failed to export trace: %s", rank, e)
 
             cls._profiler = None

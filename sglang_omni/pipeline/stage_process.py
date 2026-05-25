@@ -116,7 +116,7 @@ def stage_process_main(
         for stage_spec in spec.stage_specs:
             _prepare_cuda_environment(stage_spec, log)
         _run_process(spec, ready_event, log)
-    except Exception:
+    except Exception:  # noqa: BLE001 - report startup failure.
         import traceback
 
         log.exception("Stage process %s failed", spec.process_name)

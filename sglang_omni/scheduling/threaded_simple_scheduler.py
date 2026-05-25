@@ -92,7 +92,7 @@ class ThreadedSimpleScheduler:
 
         try:
             result = future.result()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - forward future failure.
             logger.exception(
                 "ThreadedSimpleScheduler: compute_fn failed for %s", request_id
             )

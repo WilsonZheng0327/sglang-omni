@@ -391,7 +391,7 @@ class MultiProcessPipelineRunner:
                 total_procs,
             )
 
-        except Exception:
+        except Exception:  # noqa: BLE001 - clean failed startup.
             await self._cleanup_on_failure()
             raise
 
@@ -453,7 +453,7 @@ class MultiProcessPipelineRunner:
         # Send shutdown to stages via coordinator
         try:
             await self._coordinator.shutdown_stages()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - continue stop cleanup.
             logger.warning("shutdown_stages error: %s", e)
 
         # Shutdown all groups
@@ -489,7 +489,7 @@ class MultiProcessPipelineRunner:
         if self._coordinator is not None:
             try:
                 await self._coordinator.stop()
-            except Exception:
+            except Exception:  # noqa: BLE001 - continue failure cleanup.
                 pass
             self._coordinator = None
 

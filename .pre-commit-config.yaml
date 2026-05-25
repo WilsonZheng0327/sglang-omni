@@ -39,6 +39,12 @@ repos:
         args: [--select=F401, --fixable=F401]
         files: ^(benchmarks/|docs/|examples/)
         exclude: \.ipynb$
+      - id: ruff
+        name: ruff-ble001
+        alias: ruff-ble001
+        args: [--select=BLE001]
+        files: ^sglang_omni/
+        exclude: \.ipynb$
   - repo: https://github.com/psf/black
     rev: 24.10.0
     hooks:

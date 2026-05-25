@@ -202,7 +202,7 @@ class NcclRelay(Relay):
 
         try:
             dist.barrier(group=self.connection.group)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - log barrier failure.
             logger.error(f"Barrier failed: {e}")
             raise e
 
@@ -228,7 +228,7 @@ class NcclRelay(Relay):
 
             dist.barrier(group=self.connection.group)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - log warmup failure.
             logger.error(
                 f"[{engine_id}] NCCL Warmup failed! Check topology consistency."
             )

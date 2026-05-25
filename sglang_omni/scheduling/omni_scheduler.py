@@ -457,7 +457,7 @@ class OmniScheduler:
             )
             try:
                 req_data = self._request_builder(payload)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - route builder error.
                 logger.exception(f"OmniScheduler: request builder failed for {req_id}")
                 self._pending_stream_done.discard(req_id)
                 self._deferred_request_payloads.pop(req_id, None)
@@ -577,7 +577,7 @@ class OmniScheduler:
     def run_batch(self, batch, pp_proxy_tensors=None):
         try:
             return self._run_batch(batch, pp_proxy_tensors)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - scheduler owns batch failure routing.
             self._handle_batch_failure(batch, exc)
             return _FAILED_BATCH_RESULT
 
@@ -751,7 +751,7 @@ class OmniScheduler:
         if self._abort_callback is not None and not running_abort:
             try:
                 self._abort_callback(request_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 - keep scheduler cleanup.
                 logger.exception(
                     "OmniScheduler: abort cleanup failed for %s", request_id
                 )

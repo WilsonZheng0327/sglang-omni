@@ -132,7 +132,7 @@ class Coordinator:
             try:
                 await self.control_plane.send_shutdown(name, info.control_endpoint)
                 logger.info("Sent shutdown to stage: %s", name)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - continue shutdown.
                 logger.warning("Failed to send shutdown to stage %s: %s", name, e)
 
     async def submit(self, request_id: str, request: OmniRequest | Any) -> Any:
@@ -300,7 +300,7 @@ class Coordinator:
                     await self._handle_completion(msg)
         except asyncio.CancelledError:
             logger.info("Coordinator completion loop cancelled")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - log before re-raise.
             logger.error("Coordinator completion loop error: %s", e)
             raise
 

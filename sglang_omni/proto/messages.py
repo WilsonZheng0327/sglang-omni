@@ -83,7 +83,7 @@ class DataReadyMessage:
                     if k not in ["_type", "shm_segments"]
                 }
                 metadata = RdmaMetadata(**clean_dict)
-            except (ImportError, Exception):
+            except Exception:  # noqa: BLE001 - metadata fallback to dict.
                 # Fallback to dict if RdmaMetadata not available
                 metadata = {k: v for k, v in metadata_dict.items() if k != "_type"}
         elif metadata_type == "SHMMetadata" or "shm_segments" in metadata_dict:
@@ -92,7 +92,7 @@ class DataReadyMessage:
                 from sglang_omni.relay.nixl import SHMMetadata
 
                 metadata = SHMMetadata.from_dict(metadata_dict)
-            except (ImportError, Exception):
+            except Exception:  # noqa: BLE001 - metadata fallback to dict.
                 # Fallback to dict if SHMMetadata not available
                 metadata = {k: v for k, v in metadata_dict.items() if k != "_type"}
         elif "descriptors" in metadata_dict:
@@ -106,7 +106,7 @@ class DataReadyMessage:
                     if k not in ["_type", "shm_segments"]
                 }
                 metadata = RdmaMetadata(**clean_dict)
-            except (ImportError, Exception):
+            except Exception:  # noqa: BLE001 - metadata fallback to dict.
                 # Fallback to dict
                 metadata = {k: v for k, v in metadata_dict.items() if k != "_type"}
         else:

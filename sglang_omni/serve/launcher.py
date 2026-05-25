@@ -208,7 +208,7 @@ def _mount_profiler_routes(
                 _get_event_recorder().start(
                     run_id=run_id, event_dir=event_dir, stage="coordinator"
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - profiler setup optional.
                 logger.warning(
                     "Failed to start coordinator request event recorder",
                     exc_info=True,
@@ -246,7 +246,7 @@ def _mount_profiler_routes(
             _get_event_recorder().start(
                 run_id=run_id, event_dir=event_dir, stage="coordinator"
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - profiler setup optional.
             logger.warning(
                 "Failed to start coordinator request event recorder",
                 exc_info=True,

@@ -124,7 +124,7 @@ class MingTalkerExecutor:
         try:
             extractor = SpkembExtractor(campplus_path)
             self._talker.set_spkemb_extractor(extractor)
-        except (ImportError, Exception) as e:
+        except Exception as e:  # noqa: BLE001 - speaker extractor optional.
             logger.warning("[TALKER] SpkembExtractor not available: %s", e)
 
         # 7. Load text normalizer (optional)
@@ -159,7 +159,7 @@ class MingTalkerExecutor:
                 "[TALKER] Thinker tokenizer loaded: %s",
                 type(self._thinker_tokenizer).__name__,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - tokenizer optional.
             logger.warning("[TALKER] Could not load thinker tokenizer: %s", e)
 
         # 10. Initialize CUDA graphs

@@ -161,7 +161,7 @@ class Stage:
                             self.gpu_id,
                         )
                     self.scheduler.start()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - fail active requests.
                     logger.exception("Scheduler thread for stage %s crashed", self.name)
                     self._running = False
                     loop = self._loop
@@ -219,7 +219,7 @@ class Stage:
                 await self._handle_message(msg)
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception:  # noqa: BLE001 - preserve crash state.
             if self._scheduler_crash_error is None:
                 raise
         finally:
@@ -283,7 +283,7 @@ class Stage:
             payload = await relay_io.read_payload(
                 self.relay, request_id, msg.shm_metadata
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - route relay error.
             logger.exception(
                 "Stage %s: relay read failed for %s", self.name, request_id
             )
@@ -322,7 +322,7 @@ class Stage:
         if isinstance(msg.shm_metadata, dict) and msg.shm_metadata.get("_ipc"):
             try:
                 item = self._deserialize_ipc_chunk(msg)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - fail one request.
                 logger.error(
                     "Stage %s: IPC deserialize failed for %s: %s",
                     self.name,
@@ -342,7 +342,7 @@ class Stage:
         try:
             data = await relay_io.read_blob(self.relay, blob_key, msg.shm_metadata)
             metadata = await self._read_chunk_metadata(msg.shm_metadata, blob_key)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - route chunk error.
             logger.error(
                 "Stage %s: stream chunk read failed for %s: %s",
                 self.name,
@@ -443,7 +443,7 @@ class Stage:
         request_id = msg.request_id
         try:
             await relay_io.read_payload(self.relay, request_id, msg.shm_metadata)
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort drain.
             logger.debug(
                 "Stage %s: failed to drain aborted payload for %s",
                 self.name,
@@ -463,7 +463,7 @@ class Stage:
         try:
             await relay_io.read_blob(self.relay, blob_key, msg.shm_metadata)
             await self._read_chunk_metadata(msg.shm_metadata, blob_key)
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort drain.
             logger.debug(
                 "Stage %s: failed to drain aborted stream chunk for %s",
                 self.name,
@@ -873,7 +873,7 @@ class Stage:
                 self._on_abort(abort_msg.request_id)
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception:  # noqa: BLE001 - keep crash state.
             if self._scheduler_crash_error is None and self._running:
                 logger.exception("Stage %s abort listener crashed", self.name)
 
@@ -905,7 +905,7 @@ class Stage:
                 _get_recorder().start(
                     run_id=run_id, event_dir=msg.event_dir, stage=self.name
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - profiling must not block stage control.
                 logger.warning(
                     "Stage %s failed to start request event recorder",
                     self.name,

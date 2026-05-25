@@ -258,7 +258,7 @@ class NixlRelay(Relay):
                 on_completion_cb=lambda: self.allocator.release(offset),
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - release credit.
             # If creating the op fails, release immediately
             self.allocator.release(offset)
             raise e
@@ -335,7 +335,7 @@ class NixlRelay(Relay):
                 on_completion_cb=lambda: self.allocator.release(local_offset),
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - release credit.
             self.allocator.release(local_offset)
             raise e
 
@@ -346,5 +346,5 @@ class NixlRelay(Relay):
         if NIXL_AVAILABLE:
             try:
                 self.connection._nixl.deregister_memory(self.pool_handle)
-            except:
+            except Exception:  # noqa: BLE001 - ignore close cleanup.
                 pass

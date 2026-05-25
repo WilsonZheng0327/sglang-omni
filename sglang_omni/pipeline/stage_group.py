@@ -145,7 +145,7 @@ class StageGroup:
             try:
                 with _patched_spawn_env(spec):
                     proc.start()
-            except Exception:
+            except Exception:  # noqa: BLE001 - close startup queue.
                 _close_queue(startup_error_channel)
                 raise
             self._processes.append(proc)
