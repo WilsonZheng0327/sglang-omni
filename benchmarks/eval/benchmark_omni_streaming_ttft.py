@@ -17,7 +17,7 @@ Usage:
 
     # Treatment server (partial-start enabled):
     python examples/run_qwen3_omni_speech_server.py --port 8001 \\
-        --partial-start-min-chunks 5 ...
+        --enable-partial-start --partial-start-min-chunks 5 ...
     python benchmarks/eval/benchmark_omni_streaming_ttft.py \\
         --base-url http://localhost:8001 \\
         --label partial5 --output results/ttft_partial5.json --repeats 5

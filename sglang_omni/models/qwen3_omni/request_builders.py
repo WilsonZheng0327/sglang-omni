@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 IMAGE_STAGE = "image_encoder"
 AUDIO_STAGE = "audio_encoder"
+THINKER_STAGE = "thinker"
 DECODE_STAGE = "decode"
 TALKER_STAGE = "talker_ar"
 CODE2WAV_STAGE = "code2wav"
@@ -64,10 +65,17 @@ def should_generate_audio_output(
 def resolve_thinker_next_stages(
     request_id: str, output: StagePayload
 ) -> str | list[str]:
+    del request_id, output
+    return DECODE_STAGE
+
+
+def resolve_mm_aggregate_next_stages(
+    request_id: str, output: StagePayload
+) -> str | list[str]:
     del request_id
     if should_generate_audio_output(output):
-        return [DECODE_STAGE, TALKER_STAGE]
-    return DECODE_STAGE
+        return [THINKER_STAGE, TALKER_STAGE]
+    return THINKER_STAGE
 
 
 def resolve_thinker_stream_done_targets(
