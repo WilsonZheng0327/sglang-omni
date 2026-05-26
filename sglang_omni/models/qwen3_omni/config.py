@@ -83,6 +83,7 @@ def _aggregate_stage(*, process: str, speech_enabled: bool = False) -> StageConf
             process=process,
             factory=f"{_PKG}.stages.create_aggregate_executor",
             wait_for=["preprocessing", "image_encoder", "audio_encoder"],
+            wait_for_fn=f"{_PKG}.request_builders.resolve_mm_aggregate_wait_sources",
             merge_fn=f"{_PKG}.merge.merge_for_thinker",
             next=["thinker", "talker_ar"],
             project_payload={
