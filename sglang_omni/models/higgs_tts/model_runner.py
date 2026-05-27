@@ -21,12 +21,28 @@ from sglang_omni.models.higgs_tts.model import _flat_sampling_attr
 from sglang_omni.models.higgs_tts.sampler import K_MAX
 from sglang_omni.models.higgs_tts.text_tokenizer import AUDIO_PLACEHOLDER_ID
 from sglang_omni.models.higgs_tts.utils import EOC_ID
+from sglang_omni.scheduling.messages import OutgoingMessage
 
 logger = logging.getLogger(__name__)
 
 
 class HiggsTTSModelRunner(ModelRunner):
     """ModelRunner for :class:`HiggsTTSModel`."""
+
+    def __init__(
+        self,
+        tp_worker: Any,
+        output_processor: Any,
+        outbox: Any | None = None,
+        *,
+        vocoder_target: str = "vocoder",
+    ) -> None:
+        super().__init__(tp_worker, output_processor)
+        self._outbox = outbox
+        self._vocoder_target = vocoder_target
+
+    def set_stream_outbox(self, outbox: Any) -> None:
+        self._outbox = outbox
 
     def prepare_prefill(self, forward_batch, schedule_batch, requests):
         del schedule_batch
@@ -171,6 +187,7 @@ class HiggsTTSModelRunner(ModelRunner):
             codes_N = codes_BN_cpu[b]
             data.output_codes.append(codes_N.to(torch.long))
             data.generation_done = bool(gen_done_after_cpu[b])
+            self._emit_code_chunk(sched_req, codes_N)
             self._mark_sampler_finished(req, data.generation_done)
             cb0_per_row.append(int(codes_N[0].item()))
 
@@ -241,8 +258,10 @@ class HiggsTTSModelRunner(ModelRunner):
                 cb0_per_row.append(0)
                 continue
             codes_N = codes_log[-1]
-            data.output_codes.append(codes_N.detach().cpu().clone())
+            codes_N_cpu = codes_N.detach().cpu().clone()
+            data.output_codes.append(codes_N_cpu)
             data.generation_done = bool(model._sampler_pool.generation_done[row].item())
+            self._emit_code_chunk(sched_req, codes_N_cpu)
             self._mark_sampler_finished(req, data.generation_done)
             cb0_per_row.append(int(codes_N[0].item()))
 
@@ -257,6 +276,26 @@ class HiggsTTSModelRunner(ModelRunner):
         """Bridge Higgs sampler completion into upstream SGLang finish state."""
         if generation_done and req.finished_reason is None:
             req.finished_reason = FINISH_MATCHED_TOKEN(EOC_ID)
+
+    def _emit_code_chunk(self, sched_req: Any, codes_N: torch.Tensor) -> None:
+        if self._outbox is None:
+            return
+        stage_payload = getattr(sched_req.data, "stage_payload", None)
+        is_streaming = bool(
+            stage_payload is not None
+            and (stage_payload.request.params or {}).get("stream", False)
+        )
+        if not is_streaming:
+            return
+        self._outbox.put(
+            OutgoingMessage(
+                request_id=sched_req.request_id,
+                type="stream",
+                target=self._vocoder_target,
+                data=codes_N.detach().cpu().clone(),
+                metadata={"stream": is_streaming, "modality": "audio_codes"},
+            )
+        )
 
 
 __all__ = ["HiggsTTSModelRunner"]

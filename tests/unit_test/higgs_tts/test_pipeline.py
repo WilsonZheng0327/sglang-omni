@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import queue
 from types import SimpleNamespace
 
 import torch
 
 from sglang_omni.models.higgs_tts import stages
 from sglang_omni.models.higgs_tts.model_runner import HiggsTTSModelRunner
-from sglang_omni.models.higgs_tts.utils import EOC_ID
+from sglang_omni.models.higgs_tts.payload_types import HiggsTtsState
+from sglang_omni.models.higgs_tts.streaming_vocoder import (
+    HiggsStreamingVocoderScheduler,
+)
+from sglang_omni.models.higgs_tts.utils import EOC_ID, apply_delay_pattern
+from sglang_omni.proto import OmniRequest, StagePayload
 
 
 def test_higgs_tts_engine_enables_cuda_graph_by_default(monkeypatch) -> None:
@@ -79,6 +85,8 @@ def test_higgs_tts_engine_enables_cuda_graph_by_default(monkeypatch) -> None:
 
 def test_higgs_model_runner_marks_sampler_finish() -> None:
     runner = object.__new__(HiggsTTSModelRunner)
+    runner._outbox = queue.Queue()
+    runner._vocoder_target = "vocoder"
     runner.model = SimpleNamespace(
         _rid_to_row={"req": 0},
         _output_codes={"req": [torch.tensor([EOC_ID, 1, 2])]},
@@ -89,7 +97,17 @@ def test_higgs_model_runner_marks_sampler_finish() -> None:
         finished_reason=None,
         finished=lambda: False,
     )
-    data = SimpleNamespace(req=req, output_codes=[], generation_done=False)
+    payload = StagePayload(
+        request_id="req",
+        request=OmniRequest(inputs="", params={"stream": True}),
+        data={},
+    )
+    data = SimpleNamespace(
+        req=req,
+        output_codes=[],
+        generation_done=False,
+        stage_payload=payload,
+    )
     result = SimpleNamespace(
         logits_output=SimpleNamespace(next_token_logits=torch.zeros(1, 4))
     )
@@ -102,10 +120,17 @@ def test_higgs_model_runner_marks_sampler_finish() -> None:
     assert data.generation_done is True
     assert req.finished_reason.to_json() == {"type": "stop", "matched": EOC_ID}
     assert len(data.output_codes) == 1
+    out = runner._outbox.get_nowait()
+    assert out.type == "stream"
+    assert out.target == "vocoder"
+    assert out.metadata["stream"] is True
+    assert out.data.tolist() == [EOC_ID, 1, 2]
 
 
 def test_higgs_model_runner_marks_sampler_finish_cg() -> None:
     runner = object.__new__(HiggsTTSModelRunner)
+    runner._outbox = queue.Queue()
+    runner._vocoder_target = "vocoder"
     runner.model = SimpleNamespace(
         _cg_row_indices=torch.tensor([0]),
         _cg_active_delay_count=torch.tensor([8], dtype=torch.int32),
@@ -123,7 +148,17 @@ def test_higgs_model_runner_marks_sampler_finish_cg() -> None:
         ),
     )
     req = SimpleNamespace(is_chunked=0, finished_reason=None)
-    data = SimpleNamespace(req=req, output_codes=[], generation_done=False)
+    payload = StagePayload(
+        request_id="req",
+        request=OmniRequest(inputs="", params={"stream": False}),
+        data={},
+    )
+    data = SimpleNamespace(
+        req=req,
+        output_codes=[],
+        generation_done=False,
+        stage_payload=payload,
+    )
     result = SimpleNamespace(
         logits_output=SimpleNamespace(next_token_logits=torch.zeros(1, 4))
     )
@@ -138,6 +173,7 @@ def test_higgs_model_runner_marks_sampler_finish_cg() -> None:
     assert data.generation_done is True
     assert req.finished_reason.to_json() == {"type": "stop", "matched": EOC_ID}
     assert len(data.output_codes) == 1
+    assert runner._outbox.empty()
 
 
 def test_higgs_model_runner_collect_cg_mixed_batch() -> None:
@@ -147,6 +183,8 @@ def test_higgs_model_runner_collect_cg_mixed_batch() -> None:
     """
     n, k = 4, 3
     runner = object.__new__(HiggsTTSModelRunner)
+    runner._outbox = None
+    runner._vocoder_target = "vocoder"
     runner.model = SimpleNamespace(
         _cg_row_indices=torch.arange(n),
         _cg_active_delay_count=torch.zeros(n, dtype=torch.int32),
@@ -198,6 +236,8 @@ def test_higgs_model_runner_collect_cg_mixed_batch() -> None:
 
 def test_higgs_model_runner_skips_already_finished_eager_request() -> None:
     runner = object.__new__(HiggsTTSModelRunner)
+    runner._outbox = queue.Queue()
+    runner._vocoder_target = "vocoder"
     runner.model = SimpleNamespace(
         _rid_to_row={"req": 0},
         _output_codes={"req": [torch.tensor([EOC_ID, 1, 2])]},
@@ -220,3 +260,92 @@ def test_higgs_model_runner_skips_already_finished_eager_request() -> None:
 
     assert data.output_codes == []
     assert result.next_token_ids.tolist() == [0]
+    assert runner._outbox.empty()
+
+
+class _FakeHiggsCodec:
+    def __init__(self, samples_per_frame: int = 4) -> None:
+        self.samples_per_frame = samples_per_frame
+
+    def decode(self, codes_TN: torch.Tensor) -> torch.Tensor:
+        frames = int(codes_TN.shape[0])
+        return torch.arange(frames * self.samples_per_frame, dtype=torch.float32)
+
+
+def _higgs_payload(request_id: str, *, stream: bool, delayed_rows):
+    state = HiggsTtsState(
+        output_codes_delayed=delayed_rows,
+        num_codebooks=3,
+        prompt_tokens=2,
+        completion_tokens=len(delayed_rows),
+    )
+    return StagePayload(
+        request_id=request_id,
+        request=OmniRequest(inputs="", params={"stream": stream}),
+        data=state.to_dict(),
+    )
+
+
+def test_higgs_streaming_vocoder_emits_chunks_and_slim_final() -> None:
+    raw_codes = torch.tensor(
+        [
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9],
+            [10, 11, 12],
+            [13, 14, 15],
+            [16, 17, 18],
+        ],
+        dtype=torch.long,
+    )
+    delayed = apply_delay_pattern(raw_codes)
+    scheduler = HiggsStreamingVocoderScheduler(
+        _FakeHiggsCodec(),
+        stream_stride=3,
+        stream_followup_stride=2,
+        stream_holdback_tokens=0,
+    )
+    payload = _higgs_payload("req", stream=True, delayed_rows=delayed.tolist())
+
+    for row in delayed:
+        scheduler._on_chunk(
+            "req",
+            SimpleNamespace(data=row, metadata={"stream": True}),
+        )
+    scheduler._on_done("req")
+    scheduler._on_new_request("req", payload)
+
+    messages = []
+    while not scheduler.outbox.empty():
+        messages.append(scheduler.outbox.get_nowait())
+
+    stream_messages = [msg for msg in messages if msg.type == "stream"]
+    result_messages = [msg for msg in messages if msg.type == "result"]
+    assert len(stream_messages) >= 2
+    assert len(result_messages) == 1
+    assert result_messages[0].data.data == {
+        "modality": "audio",
+        "sample_rate": 24000,
+        "usage": {
+            "prompt_tokens": 2,
+            "completion_tokens": len(delayed),
+            "total_tokens": 2 + len(delayed),
+        },
+    }
+    assert all(msg.metadata["modality"] == "audio" for msg in stream_messages)
+    assert all("audio_data" in msg.data for msg in stream_messages)
+
+
+def test_higgs_vocoder_non_streaming_returns_full_audio() -> None:
+    raw_codes = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long)
+    delayed = apply_delay_pattern(raw_codes)
+    scheduler = HiggsStreamingVocoderScheduler(_FakeHiggsCodec())
+    payload = _higgs_payload("req", stream=False, delayed_rows=delayed.tolist())
+
+    scheduler._on_new_request("req", payload)
+
+    out = scheduler.outbox.get_nowait()
+    assert out.type == "result"
+    assert out.data.data["modality"] == "audio"
+    assert out.data.data["sample_rate"] == 24000
+    assert out.data.data["audio_data"] == list(range(8))

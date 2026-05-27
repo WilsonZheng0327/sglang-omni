@@ -23,6 +23,8 @@ stages:
         disable_cuda_graph: true
     gpu: 0
     next: vocoder
+    stream_to:
+      - vocoder
   - name: vocoder
     process: pipeline
     factory: sglang_omni.models.higgs_tts.stages.create_vocoder_executor
@@ -30,3 +32,4 @@ stages:
       device: cuda
     gpu: 0
     terminal: true
+    can_accept_stream_before_payload: true

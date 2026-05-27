@@ -31,17 +31,18 @@ import torchaudio.functional as F_audio
 from tokenizers import Tokenizer
 from transformers import PreTrainedTokenizerFast
 
-from sglang_omni.models.higgs_tts.audio_codec import HiggsAudioCodec
 from sglang_omni.models.higgs_tts.model_runner import HiggsTTSModelRunner
 from sglang_omni.models.higgs_tts.payload_types import HiggsTtsState
 from sglang_omni.models.higgs_tts.request_builders import make_higgs_scheduler_adapters
+from sglang_omni.models.higgs_tts.streaming_vocoder import (
+    HiggsStreamingVocoderScheduler,
+)
 from sglang_omni.models.higgs_tts.text_tokenizer import HiggsTokenizerAdapter
 from sglang_omni.models.higgs_tts.utils import (
     apply_delay_pattern,
     get_or_load_codec,
     load_audio_to_24k,
     resolve_checkpoint,
-    reverse_delay_pattern,
     to_codes_TN,
     truncate_rope_to_bf16,
 )
@@ -284,7 +285,7 @@ def create_sglang_tts_engine_executor(
         max_new_tokens_cap=max_new_tokens,
     )
 
-    return OmniScheduler(
+    scheduler = OmniScheduler(
         tp_worker=model_worker,
         tree_cache=tree_cache,
         req_to_token_pool=req_to_token_pool,
@@ -298,6 +299,9 @@ def create_sglang_tts_engine_executor(
         result_adapter=result_adapter,
         abort_callback=model.reset_request,
     )
+    if hasattr(model_runner, "set_stream_outbox"):
+        model_runner.set_stream_outbox(scheduler.outbox)
+    return scheduler
 
 
 def create_vocoder_executor(
@@ -307,59 +311,24 @@ def create_vocoder_executor(
     dtype: str = "bfloat16",
     max_batch_size: int = 4,
     max_batch_wait_ms: int = 2,
+    stream_stride: int = 75,
+    stream_followup_stride: int = 75,
+    stream_overlap_tokens: int = 8,
+    stream_holdback_tokens: int = 4,
 ):
     """Decode Higgs delayed codes to a mono 24 kHz waveform.
 
     Codec weights are extracted from the TTS checkpoint itself.
     """
+    del max_batch_size, max_batch_wait_ms
     checkpoint_dir = resolve_checkpoint(model_path)
     codec = get_or_load_codec(checkpoint_dir, device, dtype)
-    sample_rate = HiggsAudioCodec.SAMPLE_RATE
-
-    def _vocode(payload: StagePayload) -> StagePayload:
-        state = HiggsTtsState.from_dict(payload.data)
-        delayed_rows = state.output_codes_delayed
-
-        if not delayed_rows:
-            payload.data["audio_data"] = []
-            payload.data["sample_rate"] = sample_rate
-            payload.data["modality"] = "audio"
-            return payload
-
-        delayed_LN = torch.tensor(delayed_rows, dtype=torch.long)
-        N = state.num_codebooks
-        if delayed_LN.shape[0] < N:
-            payload.data["audio_data"] = []
-            payload.data["sample_rate"] = sample_rate
-            payload.data["modality"] = "audio"
-            return payload
-
-        codes_TN = reverse_delay_pattern(delayed_LN)
-        codec_vocab = state.codebook_size - 2  # 1026 - BOC - EOC
-        codes_TN = torch.where(
-            codes_TN >= codec_vocab, torch.zeros_like(codes_TN), codes_TN
-        )
-        waveform = codec.decode(codes_TN)
-        audio_np = waveform.detach().to(torch.float32).cpu().numpy()
-
-        payload.data["audio_data"] = audio_np.tolist()
-        payload.data["sample_rate"] = sample_rate
-        payload.data["modality"] = "audio"
-        if state.prompt_tokens or state.completion_tokens or state.engine_time_s:
-            usage = {
-                "prompt_tokens": state.prompt_tokens,
-                "completion_tokens": state.completion_tokens,
-                "total_tokens": state.prompt_tokens + state.completion_tokens,
-            }
-            if state.engine_time_s:
-                usage["engine_time_s"] = round(state.engine_time_s, 6)
-            payload.data["usage"] = usage
-        return payload
-
-    return SimpleScheduler(
-        _vocode,
-        max_batch_size=max_batch_size,
-        max_batch_wait_ms=max_batch_wait_ms,
+    return HiggsStreamingVocoderScheduler(
+        codec,
+        stream_stride=stream_stride,
+        stream_followup_stride=stream_followup_stride,
+        stream_overlap_tokens=stream_overlap_tokens,
+        stream_holdback_tokens=stream_holdback_tokens,
     )
 
 
