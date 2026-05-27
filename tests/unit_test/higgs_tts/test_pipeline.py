@@ -346,6 +346,7 @@ def test_higgs_vocoder_non_streaming_returns_full_audio() -> None:
     scheduler = HiggsStreamingVocoderScheduler(_FakeHiggsCodec())
     payload = _higgs_payload("req", stream=False, delayed_rows=delayed.tolist())
 
+    scheduler._on_done("req")
     scheduler._on_new_request("req", payload)
 
     out = scheduler.outbox.get_nowait()
@@ -353,3 +354,4 @@ def test_higgs_vocoder_non_streaming_returns_full_audio() -> None:
     assert out.data.data["modality"] == "audio"
     assert out.data.data["sample_rate"] == 24000
     assert out.data.data["audio_data"] == list(range(8))
+    assert scheduler._pending_done == set()

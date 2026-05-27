@@ -94,6 +94,7 @@ class HiggsStreamingVocoderScheduler:
     def _on_new_request(self, request_id: str, payload: StagePayload) -> None:
         streaming = bool(payload.request.params.get("stream"))
         if not streaming:
+            self._pending_done.discard(request_id)
             result = self._vocode_payload(payload)
             self.outbox.put(
                 OutgoingMessage(request_id=request_id, type="result", data=result)
