@@ -157,7 +157,9 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../cookbook/higgs_tts.html">Higgs Audio v3 TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/higgs_tts.html">Higgs TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/voxtral_tts.html">Voxtral TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/qwen3_tts.html">Qwen3 TTS</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Basic Usage</span></p>
 <ul class="current nav bd-sidenav">
@@ -466,11 +468,11 @@ uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </s
 <td><p><code class="docutils literal notranslate"><span class="pre">examples/configs/s2pro_tts.yaml</span></code></p></td>
 <td><p>Supports plain TTS and voice cloning with <code class="docutils literal notranslate"><span class="pre">references</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>Voxtral TTS</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="../cookbook/voxtral_tts.html"><span class="std std-doc">Voxtral TTS</span></a></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">examples/configs/voxtral_tts.yaml</span></code></p></td>
 <td><p>Uses <code class="docutils literal notranslate"><span class="pre">input</span></code>, <code class="docutils literal notranslate"><span class="pre">voice</span></code>, <code class="docutils literal notranslate"><span class="pre">response_format</span></code>, and <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code>; use <code class="docutils literal notranslate"><span class="pre">--no-ref-audio</span></code> for SeedTTS benchmarking</p></td>
 </tr>
-<tr class="row-even"><td><p>Qwen3-TTS Base</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="../cookbook/qwen3_tts.html"><span class="std std-doc">Qwen3-TTS Base</span></a></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">examples/configs/qwen3_tts_0_6b.yaml</span></code>, <code class="docutils literal notranslate"><span class="pre">examples/configs/qwen3_tts_1_7b.yaml</span></code></p></td>
 <td><p>Requires reference audio through <code class="docutils literal notranslate"><span class="pre">ref_audio</span></code> or <code class="docutils literal notranslate"><span class="pre">references[0].audio_path</span></code>; <code class="docutils literal notranslate"><span class="pre">language</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">auto</span></code></p></td>
 </tr>
