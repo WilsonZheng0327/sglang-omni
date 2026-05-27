@@ -8,7 +8,9 @@ import torch
 from sglang_omni.models.higgs_tts import stages
 from sglang_omni.models.higgs_tts.model_runner import HiggsTTSModelRunner
 from sglang_omni.models.higgs_tts.payload_types import HiggsTtsState
-from sglang_omni.models.higgs_tts.stages import HiggsVocoderScheduler
+from sglang_omni.models.higgs_tts.streaming_vocoder import (
+    HiggsStreamingVocoderScheduler,
+)
 from sglang_omni.models.higgs_tts.utils import EOC_ID, apply_delay_pattern
 from sglang_omni.proto import OmniRequest, StagePayload
 
@@ -288,11 +290,7 @@ def _higgs_payload(request_id: str, *, stream: bool, delayed_rows):
     )
 
 
-def _unreachable_vocode(_payload: StagePayload) -> StagePayload:
-    raise AssertionError("vocode_fn must not be called for streaming requests")
-
-
-def test_higgs_vocoder_streaming_emits_chunks_and_slim_final() -> None:
+def test_higgs_streaming_vocoder_emits_chunks_and_slim_final() -> None:
     raw_codes = torch.tensor(
         [
             [1, 2, 3],
@@ -305,10 +303,8 @@ def test_higgs_vocoder_streaming_emits_chunks_and_slim_final() -> None:
         dtype=torch.long,
     )
     delayed = apply_delay_pattern(raw_codes)
-    scheduler = HiggsVocoderScheduler(
+    scheduler = HiggsStreamingVocoderScheduler(
         _FakeHiggsCodec(),
-        _unreachable_vocode,
-        sample_rate=24000,
         stream_stride=3,
         stream_followup_stride=2,
         stream_holdback_tokens=0,
@@ -316,7 +312,10 @@ def test_higgs_vocoder_streaming_emits_chunks_and_slim_final() -> None:
     payload = _higgs_payload("req", stream=True, delayed_rows=delayed.tolist())
 
     for row in delayed:
-        scheduler._on_chunk("req", SimpleNamespace(data=row))
+        scheduler._on_chunk(
+            "req",
+            SimpleNamespace(data=row, metadata={"stream": True}),
+        )
     scheduler._on_done("req")
     scheduler._on_new_request("req", payload)
 
@@ -341,28 +340,16 @@ def test_higgs_vocoder_streaming_emits_chunks_and_slim_final() -> None:
     assert all("audio_data" in msg.data for msg in stream_messages)
 
 
-def test_higgs_vocoder_non_streaming_delegates_to_vocode_fn() -> None:
-    final_payload = StagePayload(
-        request_id="req",
-        request=OmniRequest(inputs="", params={"stream": False}),
-        data={"modality": "audio", "audio_data": [1.0, 2.0], "sample_rate": 24000},
-    )
-    received: list[StagePayload] = []
-
-    def fake_vocode(payload: StagePayload) -> StagePayload:
-        received.append(payload)
-        return final_payload
-
-    scheduler = HiggsVocoderScheduler(
-        _FakeHiggsCodec(),
-        fake_vocode,
-        sample_rate=24000,
-    )
-    payload = _higgs_payload("req", stream=False, delayed_rows=[[1, 2, 3]])
+def test_higgs_vocoder_non_streaming_returns_full_audio() -> None:
+    raw_codes = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long)
+    delayed = apply_delay_pattern(raw_codes)
+    scheduler = HiggsStreamingVocoderScheduler(_FakeHiggsCodec())
+    payload = _higgs_payload("req", stream=False, delayed_rows=delayed.tolist())
 
     scheduler._on_new_request("req", payload)
 
-    assert received == [payload]
     out = scheduler.outbox.get_nowait()
     assert out.type == "result"
-    assert out.data is final_payload
+    assert out.data.data["modality"] == "audio"
+    assert out.data.data["sample_rate"] == 24000
+    assert out.data.data["audio_data"] == list(range(8))
