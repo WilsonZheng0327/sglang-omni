@@ -46,6 +46,7 @@ tests/
     │   ├── test_talker.py
     │   └── test_text_template.py
     ├── ming_omni/
+    │   ├── test_omni_serve.py
     │   ├── test_pipeline.py
     │   ├── test_talker.py
     │   ├── test_thinker.py
@@ -223,7 +224,9 @@ that happened to contain an older version of the test.
 - `unit_test/ming_omni/` Ming-Omni unit tests:
 
   - text + speech pipeline config and stage schema
-  - launcher argparse, GPU placement, and TP wiring
+  - omni serve CLI/config merge, default speech vs. text-only selection,
+    launcher handoff, GPU placement, TP wiring, and unsupported flag capability
+    boundaries
   - stage factory and scheduler contracts (preprocessing, encoders, thinker, talker, decode)
   - thinker bootstrap registration and Ming model runner wiring
   - multimodal embed injection (per-modality consumed state, pad-value fallback, short-embeds detection)
@@ -233,11 +236,12 @@ that happened to contain an older version of the test.
   - Bailing tokenizer loader fallback for vocab compatibility
   - TP topology validation (rank-specific stage specs, talker/thinker GPU collision detection, server_args alignment before infra init).
 
-- `unit_test/qwen3_tts/`: Qwen3-TTS Base unit tests:
+- `unit_test/qwen3_tts/`: Qwen3-TTS unit tests:
   - pipeline config and registry contracts
   - OmniScheduler-backed AR stage factory wiring
   - request mapping for `ref_audio` / `ref_text` and `references`
   - model-owned default preservation for language and sampling parameters
+  - Base, CustomVoice, and VoiceDesign request validation
   - voice-clone reference validation
   - pipeline payload state serialization.
 
