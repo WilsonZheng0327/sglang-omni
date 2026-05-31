@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Start the S2-Pro TTS playground: launches the backend, waits for health,
-# then starts the Gradio UI.
+# Start the Higgs Audio v3 TTS playground: launches the sgl-omni backend,
+# waits for health, then starts the static HTML/CSS/JS UI.
 #
 # Usage:
-#   CUDA_VISIBLE_DEVICES=0 ./playground/tts/start.sh
-#   ./playground/tts/start.sh --port 8080 --gradio-port 7861 --share
-#   ./playground/tts/start.sh --model-path /path/to/s2-pro
+#   CUDA_VISIBLE_DEVICES=0 ./playground/higgs/start.sh
+#   ./playground/higgs/start.sh --port 8080 --playground-port 7861
+#   ./playground/higgs/start.sh --model-path /path/to/higgs-tts
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,19 +16,17 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 BACKEND_PORT="${PORT:-8000}"
-GRADIO_PORT="7899"
-GRADIO_SHARE=""
-MODEL_PATH="${S2PRO_CKPT:-${MODEL_PATH:-fishaudio/s2-pro}}"
-CONFIG_PATH="${REPO_DIR}/examples/configs/s2pro_tts.yaml"
+PLAYGROUND_PORT="7860"
+MODEL_PATH="${HIGGS_CKPT:-${MODEL_PATH:-boson-sglang/higgs-audio-v3-TTS-4B-grpo05200410999}}"
+CONFIG_PATH="${REPO_DIR}/examples/configs/higgs_tts.yaml"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model-path)    MODEL_PATH="$2"; shift 2 ;;
-    --port)          BACKEND_PORT="$2"; shift 2 ;;
-    --gradio-port)   GRADIO_PORT="$2"; shift 2 ;;
-    --share)         GRADIO_SHARE="--share"; shift ;;
-    --config)        CONFIG_PATH="$2"; shift 2 ;;
-    *)               echo "Unknown arg: $1"; exit 1 ;;
+    --model-path)        MODEL_PATH="$2"; shift 2 ;;
+    --port)              BACKEND_PORT="$2"; shift 2 ;;
+    --playground-port)   PLAYGROUND_PORT="$2"; shift 2 ;;
+    --config)            CONFIG_PATH="$2"; shift 2 ;;
+    *)                   echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
 
@@ -50,24 +48,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "============================================================"
-echo "  S2-Pro TTS Playground"
+echo "  Higgs Audio v3 TTS Playground"
 echo "============================================================"
 echo ""
-echo "  Model:       ${MODEL_PATH}"
-echo "  Backend API: ${API_BASE}"
-echo "  Gradio UI:   http://localhost:${GRADIO_PORT}"
+echo "  Model:         ${MODEL_PATH}"
+echo "  Backend API:   ${API_BASE}"
+echo "  Playground UI: http://localhost:${PLAYGROUND_PORT}"
 echo ""
 echo "============================================================"
 
-# 1. Start backend
-echo "[1/2] Starting S2-Pro server..."
+echo "[1/2] Starting Higgs backend..."
 "${PYTHON_BIN}" -m sglang_omni.cli serve \
   --model-path "${MODEL_PATH}" \
   --config "${CONFIG_PATH}" \
   --port "${BACKEND_PORT}" &
 SERVER_PID=$!
 
-# 2. Wait for health
 echo "[2/2] Waiting for server..."
 for i in $(seq 1 120); do
   if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -85,25 +81,23 @@ for i in $(seq 1 120); do
   sleep 5
 done
 
-# 3. Launch Gradio
 echo ""
 echo "============================================================"
 echo "  Server is ready!"
 echo "============================================================"
 echo ""
-echo "  Gradio UI:   http://localhost:${GRADIO_PORT}"
-echo "  Backend API: ${API_BASE}"
+echo "  Playground UI: http://localhost:${PLAYGROUND_PORT}"
+echo "  Backend API:   ${API_BASE}"
 echo ""
 echo "  To access from your local machine, run:"
-echo "    ssh -L ${GRADIO_PORT}:localhost:${GRADIO_PORT} <user>@$(hostname)"
+echo "    ssh -L ${PLAYGROUND_PORT}:localhost:${PLAYGROUND_PORT} <user>@$(hostname)"
 echo ""
-echo "  Then open http://localhost:${GRADIO_PORT} in your browser."
+echo "  Then open http://localhost:${PLAYGROUND_PORT} in your browser."
 echo "============================================================"
 echo ""
 
 cd "${REPO_DIR}"
 
-exec "${PYTHON_BIN}" -m playground.tts.app \
+exec "${PYTHON_BIN}" -m playground.higgs.app \
   --api-base "${API_BASE}" \
-  --port "${GRADIO_PORT}" \
-  ${GRADIO_SHARE}
+  --port "${PLAYGROUND_PORT}"

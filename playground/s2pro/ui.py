@@ -10,14 +10,14 @@ from typing import Any
 
 import gradio as gr
 
-from playground.tts.api_client import SpeechDemoClient, SpeechDemoClientError
-from playground.tts.artifacts import ArtifactStore
-from playground.tts.audio_stream import (
+from playground.s2pro.api_client import SpeechDemoClient, SpeechDemoClientError
+from playground.s2pro.artifacts import ArtifactStore
+from playground.s2pro.audio_stream import (
     BufferedWavChunkEmitter,
     WavChunkAccumulator,
     wav_duration_seconds,
 )
-from playground.tts.models import GenerationSettings, SpeechSynthesisRequest
+from playground.s2pro.models import GenerationSettings, SpeechSynthesisRequest
 
 _ARTIFACT_STORE = ArtifactStore()
 _LIVE_AUDIO_MIN_CHUNK_DURATION_S = 1.0
