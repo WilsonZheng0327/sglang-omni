@@ -54,7 +54,8 @@ tests/
     │   ├── test_talker_voice_validation.py
     │   ├── test_thinker.py
     │   ├── test_tokenizer.py
-    │   └── test_tp.py
+    │   ├── test_tp.py
+    │   └── test_vision_patch_embed_linear.py
     ├── qwen3_tts/
     │   └── test_pipeline.py
     ├── higgs_tts/
@@ -257,7 +258,8 @@ that happened to contain an older version of the test.
   - talker executor request gating and result-builder modality merging
   - talker voice-preset validation (load-time manifest / wav existence, request-time prompt_wav_path priority), duration-cap heuristic, and `generate()` final-chunk flush across stop-token and step-ceiling exits
   - Bailing tokenizer loader fallback for vocab compatibility
-  - TP topology validation (rank-specific stage specs, talker/thinker GPU collision detection, server_args alignment before infra init).
+  - TP topology validation (rank-specific stage specs, talker/thinker GPU collision detection, server_args alignment before infra init)
+  - vision encoder `patch_embed` numerical equivalence: `nn.Conv3d` vs `F.linear` reshape at the substitution boundary, using synthetic weights without loading real Ming checkpoints.
 
 - `unit_test/qwen3_tts/`: Qwen3-TTS unit tests:
   - pipeline config and registry contracts
