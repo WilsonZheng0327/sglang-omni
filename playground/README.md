@@ -73,7 +73,6 @@ Override ports with `--port` (backend) and `--gradio-port` (UI).
 # Or run the backend yourself
 sgl-omni serve \
   --model-path boson-sglang/higgs-audio-v3-TTS-4B-grpo05200410999 \
-  --config examples/configs/higgs_tts.yaml \
   --port 8000
 
 # …then the UI separately
@@ -83,7 +82,7 @@ python -m playground.higgs.app --api-base http://localhost:8000 --port 7860
 Open <http://localhost:7860>. Features:
 
 - Non-streaming and streaming tabs (incremental playback from SSE chunks).
-- Reference audio upload **or** URL for voice cloning.
+- Reference audio from **microphone recording**, file upload, or URL for voice cloning.
 - Inline control-token picker (clickable chips for emotion / style / sfx /
   prosody) that inserts `<|category:name|>` tokens at the cursor.
 

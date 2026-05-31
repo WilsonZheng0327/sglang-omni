@@ -88,6 +88,12 @@ const finalAudioActions = $("#final-audio-actions");
 const muteButton = $("#mute-button");
 const refAudioName = $("#ref-audio-name");
 const refAudioClear = $("#ref-audio-clear");
+const refAudioRecord = $("#ref-audio-record");
+const refAudioRecordLabel = refAudioRecord.querySelector("span");
+const refRecordRow = $("#ref-record-row");
+const refRecordTimer = $("#ref-record-timer");
+const refAudioPreviewWrap = $("#ref-audio-preview-wrap");
+const refAudioPreview = $("#ref-audio-preview");
 const insertToast = $("#insert-toast");
 let insertToastTimer = null;
 const themeToggle = $("#theme-toggle");
@@ -289,20 +295,179 @@ themeToggle.addEventListener("click", () => {
   }
 })();
 
-// --- file picker filename display ----------------------
+// --- reference audio: upload, record, preview ------------
+let recordedRefFile = null;
+let recordedRefUrl = null;
+let micRecorder = null;
+let micStream = null;
+let micChunks = [];
+let recordStartedAt = null;
+let recordTimerInterval = null;
+
+function clearRecordedRefPreviewUrl() {
+  if (recordedRefUrl) {
+    URL.revokeObjectURL(recordedRefUrl);
+    recordedRefUrl = null;
+  }
+}
+
+function stopMicStream() {
+  if (micStream) {
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
+  }
+}
+
+function clearRecordTimer() {
+  if (recordTimerInterval) {
+    clearInterval(recordTimerInterval);
+    recordTimerInterval = null;
+  }
+  recordStartedAt = null;
+  refRecordTimer.textContent = "0:00";
+}
+
+function formatRecordElapsed(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function updateRefAudioLabel() {
+  const uploaded = refAudio.files && refAudio.files[0];
+  if (uploaded) {
+    refAudioName.textContent = uploaded.name;
+    refAudioName.classList.add("has-file");
+    return;
+  }
+  if (recordedRefFile) {
+    refAudioName.textContent = recordedRefFile.name;
+    refAudioName.classList.add("has-file");
+    return;
+  }
+  refAudioName.textContent = "No reference selected";
+  refAudioName.classList.remove("has-file");
+}
+
+function clearRecordedRef() {
+  recordedRefFile = null;
+  clearRecordedRefPreviewUrl();
+  refAudioPreview.pause();
+  refAudioPreview.removeAttribute("src");
+  refAudioPreview.load();
+  refAudioPreviewWrap.classList.add("hidden");
+}
+
+function clearUploadedRef() {
+  refAudio.value = "";
+}
+
+function clearReferenceAudio() {
+  clearUploadedRef();
+  clearRecordedRef();
+  updateRefAudioLabel();
+}
+
+function setRecordingUi(isRecording) {
+  refRecordRow.classList.toggle("hidden", !isRecording);
+  refAudioRecord.classList.toggle("recording", isRecording);
+  refAudioRecord.disabled = synthesisInFlight;
+  refAudioRecord.setAttribute("aria-pressed", isRecording ? "true" : "false");
+  refAudioRecord.title = isRecording
+    ? "Stop recording"
+    : "Record reference audio from microphone";
+  if (refAudioRecordLabel) {
+    refAudioRecordLabel.textContent = isRecording ? "Stop" : "Record";
+  }
+}
+
+async function startReferenceRecording() {
+  if (synthesisInFlight) return;
+  if (micRecorder && micRecorder.state === "recording") return;
+
+  clearUploadedRef();
+  clearRecordedRef();
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micChunks = [];
+    micRecorder = new MediaRecorder(micStream);
+    micRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size) micChunks.push(event.data);
+    };
+    micRecorder.onstop = () => {
+      stopMicStream();
+      clearRecordTimer();
+      setRecordingUi(false);
+
+      const blob = new Blob(micChunks, { type: "audio/webm" });
+      micChunks = [];
+      if (!blob.size) {
+        updateRefAudioLabel();
+        return;
+      }
+
+      recordedRefFile = new File(
+        [blob],
+        `reference-${Date.now()}.webm`,
+        { type: "audio/webm" },
+      );
+      clearRecordedRefPreviewUrl();
+      recordedRefUrl = URL.createObjectURL(blob);
+      refAudioPreview.src = recordedRefUrl;
+      refAudioPreviewWrap.classList.remove("hidden");
+      updateRefAudioLabel();
+    };
+
+    micRecorder.start();
+    recordStartedAt = performance.now();
+    refRecordTimer.textContent = "0:00";
+    recordTimerInterval = setInterval(() => {
+      if (recordStartedAt === null) return;
+      refRecordTimer.textContent = formatRecordElapsed(
+        performance.now() - recordStartedAt,
+      );
+    }, 250);
+    setRecordingUi(true);
+  } catch (error) {
+    stopMicStream();
+    clearRecordTimer();
+    setRecordingUi(false);
+    setStatus(
+      `Microphone access failed: ${error.message || "permission denied"}`,
+      "error",
+    );
+  }
+}
+
+function stopReferenceRecording() {
+  if (micRecorder && micRecorder.state === "recording") {
+    micRecorder.stop();
+  }
+}
+
 refAudio.addEventListener("change", () => {
   const file = refAudio.files && refAudio.files[0];
   if (file) {
-    refAudioName.textContent = file.name;
-    refAudioName.classList.add("has-file");
-  } else {
-    refAudioName.textContent = "No file selected";
-    refAudioName.classList.remove("has-file");
+    clearRecordedRef();
   }
+  updateRefAudioLabel();
 });
+
 refAudioClear.addEventListener("click", () => {
-  refAudio.value = "";
-  refAudio.dispatchEvent(new Event("change"));
+  if (micRecorder && micRecorder.state === "recording") {
+    stopReferenceRecording();
+  }
+  clearReferenceAudio();
+});
+
+refAudioRecord.addEventListener("click", () => {
+  if (micRecorder && micRecorder.state === "recording") {
+    stopReferenceRecording();
+    return;
+  }
+  startReferenceRecording();
 });
 
 // ---------------------------------------------------------------------------
@@ -397,11 +562,19 @@ function insertTokenAtCursor(token) {
 // Form helpers
 // ---------------------------------------------------------------------------
 
+function resolveReferenceAudioFile() {
+  if (refAudio.files && refAudio.files[0]) {
+    return refAudio.files[0];
+  }
+  return recordedRefFile;
+}
+
 function buildFormData() {
   const fd = new FormData();
   fd.append("text", textInput.value);
-  if (refAudio.files && refAudio.files[0]) {
-    fd.append("ref_audio", refAudio.files[0]);
+  const refFile = resolveReferenceAudioFile();
+  if (refFile) {
+    fd.append("ref_audio", refFile);
   }
   fd.append("ref_audio_url", refAudioUrl.value || "");
   fd.append("ref_text", refText.value || "");
@@ -423,6 +596,7 @@ function lockButton(busy) {
   synthButton.disabled = busy;
   synthLabel.textContent = busy ? "Synthesizing…" : "Synthesize";
   streamToggle.disabled = busy;
+  refAudioRecord.disabled = busy;
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +700,7 @@ async function runNonStreaming() {
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     finalAudio.src = url;
+    finalAudio.pause();
     const elapsed = ((performance.now() - started) / 1000).toFixed(2);
     const sizeKb = (blob.size / 1024).toFixed(0);
     const meta = `${elapsed}s total | ${sizeKb} KB`;

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Higgs Audio v3 · TTS Playground</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -67,34 +68,51 @@
 
       <details class="accordion" open>
         <summary>
-          <span class="accordion-title">Inline control tokens</span>
-          <span class="accordion-hint">click to insert at cursor</span>
-        </summary>
-        <div class="token-tabs" id="token-tabs"></div>
-        <div class="token-grid" id="token-grid"></div>
-      </details>
-
-      <details class="accordion">
-        <summary>
           <span class="accordion-title">Voice cloning</span>
-          <span class="accordion-hint">optional · upload or URL</span>
+          <span class="accordion-hint">optional · record, upload, or URL</span>
         </summary>
         <p class="hint" style="padding: 0 14px; margin: 10px 0 0;">
-          If both a file and a URL are given, the <strong>uploaded file
-          takes precedence</strong>.
+          Record from your microphone, upload a file, or paste a URL. If multiple
+          sources are given, <strong>recording / upload takes precedence</strong>
+          over URL.
         </p>
         <div class="field">
-          <label for="ref-audio">Reference audio file</label>
+          <label for="ref-audio">Reference audio</label>
           <div class="file-row">
+            <button
+              type="button"
+              id="ref-audio-record"
+              class="file-button record-button"
+              title="Record reference audio from microphone"
+              aria-pressed="false"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+              <span>Record</span>
+            </button>
             <label class="file-button" for="ref-audio">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
               <span>Choose file</span>
             </label>
-            <span class="file-name" id="ref-audio-name">No file selected</span>
+            <span class="file-name" id="ref-audio-name">No reference selected</span>
             <button type="button" id="ref-audio-clear" class="link-button">clear</button>
             <input id="ref-audio" type="file" accept="audio/*" hidden />
+          </div>
+          <div id="ref-record-row" class="ref-record-row hidden" aria-live="polite">
+            <span class="record-indicator">
+              <span class="record-dot" aria-hidden="true"></span>
+              Recording
+            </span>
+            <span id="ref-record-timer" class="record-timer">0:00</span>
+          </div>
+          <div id="ref-audio-preview-wrap" class="ref-audio-preview hidden">
+            <audio id="ref-audio-preview" controls></audio>
           </div>
         </div>
         <div class="field">
@@ -113,6 +131,15 @@
             placeholder="Transcript of the reference audio"
           ></textarea>
         </div>
+      </details>
+
+      <details class="accordion">
+        <summary>
+          <span class="accordion-title">Inline control tokens</span>
+          <span class="accordion-hint">click to insert at cursor</span>
+        </summary>
+        <div class="token-tabs" id="token-tabs"></div>
+        <div class="token-grid" id="token-grid"></div>
       </details>
 
       <details class="accordion">

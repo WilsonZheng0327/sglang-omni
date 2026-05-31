@@ -18,14 +18,12 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 BACKEND_PORT="${PORT:-8000}"
 PLAYGROUND_PORT="7860"
 MODEL_PATH="${HIGGS_CKPT:-${MODEL_PATH:-boson-sglang/higgs-audio-v3-TTS-4B-grpo05200410999}}"
-CONFIG_PATH="${REPO_DIR}/examples/configs/higgs_tts.yaml"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model-path)        MODEL_PATH="$2"; shift 2 ;;
     --port)              BACKEND_PORT="$2"; shift 2 ;;
     --playground-port)   PLAYGROUND_PORT="$2"; shift 2 ;;
-    --config)            CONFIG_PATH="$2"; shift 2 ;;
     *)                   echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -60,7 +58,6 @@ echo "============================================================"
 echo "[1/2] Starting Higgs backend..."
 "${PYTHON_BIN}" -m sglang_omni.cli serve \
   --model-path "${MODEL_PATH}" \
-  --config "${CONFIG_PATH}" \
   --port "${BACKEND_PORT}" &
 SERVER_PID=$!
 

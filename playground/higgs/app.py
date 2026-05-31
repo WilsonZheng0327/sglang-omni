@@ -23,6 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from playground.http_utils import register_playground_favicon
+
 logger = logging.getLogger(__name__)
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
@@ -114,6 +116,8 @@ def create_app(api_base: str) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    register_playground_favicon(app, frontend_dir=FRONTEND_DIR)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
