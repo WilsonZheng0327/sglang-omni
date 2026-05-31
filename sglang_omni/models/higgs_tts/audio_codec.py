@@ -260,6 +260,7 @@ class HiggsAudioCodec:
     @torch.no_grad()
     def decode_batch(self, codes_list: list[torch.Tensor]) -> list[torch.Tensor]:
         """Batch-decode variable-length ``[T_i, N]`` tensors into ``[L_i]`` waveforms."""
+
         def _batch_fn(batch_items: list[torch.Tensor]) -> list[torch.Tensor]:
             stacked = torch.stack(batch_items)
             codes_BNT = stacked.transpose(1, 2).to(device=self.device, dtype=torch.long)
