@@ -992,4 +992,6 @@ def test_higgs_audio_codec_encode_batch_input_normalisation() -> None:
     results = codec.encode_batch([wav_3d, wav_2d, wav_1d, wav_np])
 
     for i, r in enumerate(results):
-        assert torch.equal(r, ref), f"input format {i} produced different codes than encode_reference"
+        assert torch.equal(
+            r, ref
+        ), f"input format {i} produced different codes than encode_reference"
