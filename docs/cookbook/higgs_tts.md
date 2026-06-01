@@ -78,6 +78,9 @@ sgl-omni serve --model-path <higgs-model> --port 8000 --async-decode default
 sgl-omni serve --model-path <higgs-model> --port 8000 --async-decode-min-batch-size 4
 ```
 
+The legacy `--enable-async-decode` flag is still accepted as a deprecated alias
+for `--async-decode on`.
+
 ## Synthesizing Speech
 
 ### Zero-shot

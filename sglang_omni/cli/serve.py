@@ -693,6 +693,20 @@ def _apply_stage_factory_args_override(
             stage_runtime_overrides.update(updates)
 
 
+def _resolve_async_decode_flag(async_decode: str, enable_async_decode: bool) -> str:
+    """Map the deprecated bool ``--enable-async-decode`` onto the ``--async-decode``
+    tri-state. The legacy flag only expressed "on", so reject it against an
+    explicit ``--async-decode off``."""
+    if not enable_async_decode:
+        return async_decode
+    if async_decode == "off":
+        raise typer.BadParameter(
+            "--enable-async-decode cannot be combined with --async-decode off"
+        )
+    logger.warning("--enable-async-decode is deprecated; use --async-decode on.")
+    return "on"
+
+
 def apply_async_decode_cli_overrides(
     pipeline_config: PipelineConfig,
     *,
@@ -972,6 +986,15 @@ def serve(
             ),
         ),
     ] = "default",
+    enable_async_decode: Annotated[
+        bool,
+        typer.Option(
+            "--enable-async-decode",
+            "--enable_async_decode",
+            hidden=True,
+            help="Deprecated alias for '--async-decode on'.",
+        ),
+    ] = False,
     async_decode_min_batch_size: Annotated[
         int | None,
         typer.Option(
@@ -1054,7 +1077,7 @@ def serve(
     )
     merged_config = apply_async_decode_cli_overrides(
         merged_config,
-        async_decode=async_decode,
+        async_decode=_resolve_async_decode_flag(async_decode, enable_async_decode),
         async_decode_min_batch_size=async_decode_min_batch_size,
     )
     merged_config = apply_partial_start_cli_overrides(

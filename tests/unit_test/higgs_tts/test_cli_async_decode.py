@@ -12,8 +12,13 @@ from __future__ import annotations
 
 import pytest
 import typer
+import typer.main
 
-from sglang_omni.cli.serve import apply_async_decode_cli_overrides
+from sglang_omni.cli import app
+from sglang_omni.cli.serve import (
+    _resolve_async_decode_flag,
+    apply_async_decode_cli_overrides,
+)
 from sglang_omni.config import PipelineConfig, StageConfig, resolve_stage_factory_args
 from sglang_omni.models.higgs_tts.config import HiggsTtsPipelineConfig
 from sglang_omni.models.qwen3_tts.config import Qwen3TTSPipelineConfig
@@ -109,6 +114,33 @@ def test_async_decode_cli_default_is_noop_without_tts_engine_stage():
         "enable_async_decode" not in (stage.factory_args or {})
         for stage in result.stages
     )
+
+
+def test_enable_async_decode_alias_stays_registered_option():
+    # serve uses ignore_unknown_options=True, so a removed flag would fall
+    # through to ConfigManager.parse_extra_args and crash existing scripts with
+    # "Missing value for argument". Keep both spellings as real options.
+    serve_cmd = typer.main.get_command(app).commands["serve"]
+    opt_names = {
+        opt for param in serve_cmd.params for opt in getattr(param, "opts", [])
+    }
+    assert "--async-decode" in opt_names
+    assert "--enable-async-decode" in opt_names
+
+
+def test_resolve_async_decode_flag_maps_deprecated_alias_to_on():
+    assert _resolve_async_decode_flag("default", enable_async_decode=True) == "on"
+    assert _resolve_async_decode_flag("on", enable_async_decode=True) == "on"
+
+
+def test_resolve_async_decode_flag_passthrough_when_alias_absent():
+    assert _resolve_async_decode_flag("default", enable_async_decode=False) == "default"
+    assert _resolve_async_decode_flag("off", enable_async_decode=False) == "off"
+
+
+def test_resolve_async_decode_flag_conflict_rejected():
+    with pytest.raises(typer.BadParameter, match="cannot be combined"):
+        _resolve_async_decode_flag("off", enable_async_decode=True)
 
 
 def test_async_decode_min_batch_size_without_tts_engine_fails_fast():
