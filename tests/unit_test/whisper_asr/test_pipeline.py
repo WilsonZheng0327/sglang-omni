@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
+import sglang_omni.models.whisper_asr.stages as whisper_asr_stages
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 from sglang_omni.models.whisper_asr.config import WhisperASRPipelineConfig
 
@@ -19,3 +23,75 @@ def test_whisper_asr_config_uses_single_batched_stage() -> None:
         PIPELINE_CONFIG_REGISTRY.get_config("WhisperForConditionalGeneration")
         is WhisperASRPipelineConfig
     )
+
+
+def test_whisper_asr_threads_explicit_cuda_graph_bs(monkeypatch) -> None:
+    build_kwargs: dict[str, object] = {}
+    fake_processor = SimpleNamespace(
+        tokenizer=object(),
+        feature_extractor=SimpleNamespace(nb_max_frames=3000),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            AutoProcessor=SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: fake_processor
+            ),
+            GenerationConfig=SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: object()
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        whisper_asr_stages,
+        "make_whisper_scheduler_adapters",
+        lambda **kwargs: (object(), object()),
+    )
+    monkeypatch.setattr(
+        whisper_asr_stages,
+        "ModelRunner",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        whisper_asr_stages,
+        "SGLangOutputProcessor",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        whisper_asr_stages,
+        "OmniScheduler",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    def _fake_server_args_builder(model_path, context_length, **overrides):
+        build_kwargs.update(overrides)
+        return SimpleNamespace(**overrides)
+
+    def _fake_create_infrastructure(server_args, gpu_id, **kwargs):
+        model_worker = SimpleNamespace(model_runner=SimpleNamespace(model=object()))
+        return False, (
+            model_worker,
+            object(),
+            object(),
+            object(),
+            object(),
+            object(),
+            object(),
+        )
+
+    monkeypatch.setattr(
+        whisper_asr_stages,
+        "build_sglang_server_args",
+        _fake_server_args_builder,
+    )
+    monkeypatch.setattr(
+        whisper_asr_stages,
+        "create_sglang_infrastructure_defer_cuda_graph",
+        _fake_create_infrastructure,
+    )
+
+    whisper_asr_stages.create_sglang_whisper_asr_executor("dummy")
+
+    assert build_kwargs["cuda_graph_max_bs"] == 16
+    assert build_kwargs["cuda_graph_bs"] == [1, 2, 4, 8, 12, 16]

@@ -54,7 +54,7 @@ def test_consistent_sizing_is_ok():
         request_slots=64,
         buffer_capacity=65,
     )
-    assert report.ok
+    assert report.is_valid
     assert report.max_captured_bs == 64
 
 
@@ -67,7 +67,7 @@ def test_captured_exceeds_buffer_is_flagged():
         request_slots=128,
         buffer_capacity=65,
     )
-    assert not report.ok
+    assert not report.is_valid
     assert any("overruns the model buffer" in f for f in report.findings)
 
 
@@ -80,7 +80,7 @@ def test_buffer_below_admission_limit_flagged():
         request_slots=64,
         buffer_capacity=32,
     )
-    assert not report.ok
+    assert not report.is_valid
     assert any("cannot be served" in f for f in report.findings)
 
 
@@ -93,8 +93,24 @@ def test_captured_under_effective_target_is_flagged():
         request_slots=64,
         buffer_capacity=64,
     )
-    assert not report.ok
+    assert not report.is_valid
     assert any("below the effective serving target 64" in f for f in report.findings)
+
+
+def test_missing_captured_bs_under_effective_target_is_flagged():
+    report = evaluate_cuda_graph_batch_sizing(
+        stage="tts_engine",
+        max_running_requests=64,
+        cuda_graph_max_bs=64,
+        captured_bs=None,
+        request_slots=64,
+        buffer_capacity=64,
+    )
+    assert not report.is_valid
+    assert any(
+        "coverage of the effective serving target 64 cannot be verified" in f
+        for f in report.findings
+    )
 
 
 def test_clamped_cap_is_not_a_failure():
@@ -106,7 +122,7 @@ def test_clamped_cap_is_not_a_failure():
         request_slots=16,
         buffer_capacity=17,
     )
-    assert report.ok
+    assert report.is_valid
     assert not any("clamped" in f for f in report.findings)
 
 
@@ -120,7 +136,7 @@ def test_missing_buffer_validates_partial():
         buffer_capacity=None,
         buffer_source="no buffer probe registered",
     )
-    assert report.ok
+    assert report.is_valid
     assert any("model-side buffer not read" in f for f in report.findings)
 
 
@@ -241,7 +257,7 @@ def test_validate_stage_auto_reads_buffer_and_passes():
     report = validate_stage("tts_engine", runner)
     assert report.buffer_capacity == 64
     assert report.stage == "tts_engine (Qwen3TTSTalker)"
-    assert report.ok
+    assert report.is_valid
 
 
 def test_validate_stage_detects_undersized_buffer_end_to_end():
@@ -257,7 +273,7 @@ def test_validate_stage_detects_undersized_buffer_end_to_end():
     )
     report = validate_stage("tts_generation", runner)
     assert report.buffer_capacity == 64
-    assert not report.ok
+    assert not report.is_valid
     assert any("overruns the model buffer" in f for f in report.findings)
 
 
@@ -274,7 +290,7 @@ def test_validate_stage_unregistered_model_partial_report():
     runner = _fake_runner(model=model, capture_bs=[1, 16, 64])
     report = validate_stage("tts_engine", runner)
     assert report.buffer_capacity is None
-    assert report.ok
+    assert report.is_valid
     assert any("model-side buffer not read" in f for f in report.findings)
 
 

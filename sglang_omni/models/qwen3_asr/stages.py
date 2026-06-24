@@ -17,6 +17,8 @@ from sglang_omni.scheduling.bootstrap import (
 )
 from sglang_omni.scheduling.generation_batch_policy import (
     build_generation_batch_defaults,
+    build_generation_batch_overrides,
+    validate_generation_batch_policy,
 )
 from sglang_omni.scheduling.omni_scheduler import OmniScheduler
 from sglang_omni.scheduling.sglang_backend import (
@@ -49,7 +51,7 @@ def create_sglang_qwen3_asr_executor(
 
     encoder_token_count = int(feature_extractor.nb_max_frames // 2)
 
-    overrides: dict[str, Any] = {
+    defaults: dict[str, Any] = {
         "disable_cuda_graph": False,
         "disable_overlap_schedule": True,
         "enable_torch_compile": enable_torch_compile,
@@ -61,18 +63,21 @@ def create_sglang_qwen3_asr_executor(
         "dtype": dtype,
     }
     if mm_attention_backend is not None:
-        overrides["mm_attention_backend"] = mm_attention_backend
+        defaults["mm_attention_backend"] = mm_attention_backend
     else:
         sm_version = get_visible_gpu_sm_version(gpu_id)
         if sm_version is not None and sm_version >= 100:
-            overrides["mm_attention_backend"] = "triton_attn"
-    if server_args_overrides:
-        overrides.update(server_args_overrides)
+            defaults["mm_attention_backend"] = "triton_attn"
+    overrides = build_generation_batch_overrides(defaults, server_args_overrides)
 
     server_args = build_sglang_server_args(
         model_path,
         context_length=encoder_token_count + int(max_new_tokens) + 8,
         **overrides,
+    )
+    validate_generation_batch_policy(
+        model_name="Qwen3-ASR",
+        server_args=server_args,
     )
 
     want_cuda_graph, (

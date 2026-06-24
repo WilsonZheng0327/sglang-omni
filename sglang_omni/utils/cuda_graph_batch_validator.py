@@ -76,7 +76,7 @@ class CudaGraphBatchReport:
     request_slots: int | None
     buffer_capacity: int | None
     buffer_source: str | None
-    ok: bool
+    is_valid: bool
     findings: list[str] = field(default_factory=list)
 
     @property
@@ -99,7 +99,7 @@ class CudaGraphBatchReport:
         lines.append(
             f"  model-side buffers: {self.buffer_capacity} " f"[{self.buffer_source}]"
         )
-        lines.append(f"  VERDICT: {'OK' if self.ok else 'MISMATCH'}")
+        lines.append(f"  VERDICT: {'OK' if self.is_valid else 'MISMATCH'}")
         for finding in self.findings:
             lines.append(f"    - {finding}")
         return "\n".join(lines)
@@ -115,9 +115,15 @@ def evaluate_cuda_graph_batch_sizing(
     buffer_capacity: int | None,
     buffer_source: str | None = None,
 ) -> CudaGraphBatchReport:
-    """Compare the three batch-size facts and produce a verdict."""
+    """Validate capture coverage, scheduler capacity, and model buffers.
+
+    A valid report means CUDA graph capture reaches the effective runnable batch
+    target and every readable model-side per-request buffer can hold that target.
+    Missing capture information is a mismatch whenever the serving target is
+    known, because the stage cannot prove that replay covers peak concurrency.
+    """
     findings: list[str] = []
-    ok = True
+    is_valid = True
 
     captured = [b for b in (captured_bs or []) if b is not None]
     max_captured = max(captured) if captured else None
@@ -132,7 +138,7 @@ def evaluate_cuda_graph_batch_sizing(
 
     if buffer_capacity is not None and max_captured is not None:
         if max_captured > buffer_capacity:
-            ok = False
+            is_valid = False
             findings.append(
                 f"graphs captured up to bs={max_captured} but model-side "
                 f"buffer holds {buffer_capacity}; capture/replay above "
@@ -144,31 +150,35 @@ def evaluate_cuda_graph_batch_sizing(
             f"config vs. captured sizes only."
         )
 
-    if (
-        max_captured is not None
-        and expected_capture_target is not None
-        and max_captured < expected_capture_target
-    ):
-        ok = False
-        findings.append(
-            f"captured CUDA graphs cover up to bs={max_captured}, below the "
-            f"effective serving target {expected_capture_target}; replay at "
-            "larger runnable batch sizes will fall back or fail."
-        )
+    if expected_capture_target is not None:
+        if max_captured is None:
+            is_valid = False
+            findings.append(
+                "captured CUDA graph batch sizes were not available, so "
+                f"coverage of the effective serving target {expected_capture_target} "
+                "cannot be verified."
+            )
+        elif max_captured < expected_capture_target:
+            is_valid = False
+            findings.append(
+                f"captured CUDA graphs cover up to bs={max_captured}, below the "
+                f"effective serving target {expected_capture_target}; replay at "
+                "larger runnable batch sizes will fall back or fail."
+            )
 
     if (
         buffer_capacity is not None
         and max_running_requests is not None
         and buffer_capacity < max_running_requests
     ):
-        ok = False
+        is_valid = False
         findings.append(
             f"model-side buffer ({buffer_capacity}) is smaller than "
             f"max_running_requests ({max_running_requests}); peak concurrency "
             f"cannot be served."
         )
 
-    if ok and not findings:
+    if is_valid and not findings:
         findings.append(
             "captured sizes and model-side buffer track the serving config."
         )
@@ -181,7 +191,7 @@ def evaluate_cuda_graph_batch_sizing(
         request_slots=request_slots,
         buffer_capacity=buffer_capacity,
         buffer_source=buffer_source,
-        ok=ok,
+        is_valid=is_valid,
         findings=findings,
     )
 

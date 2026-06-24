@@ -84,6 +84,20 @@ def create_sglang_infrastructure(
     )
 
 
+# note (luojiaxuan): Several Omni generation stages need model-specific setup
+# after the generic SGLang worker and memory pools exist, but before CUDA graph
+# capture freezes the decode path. Examples include attaching speech tokenizers,
+# allocating sampler/feedback buffers, compiling stage-local decode helpers, and
+# validating that the serving batch policy matches those buffers. Capture should
+# prioritize the steady-state decode shapes that users hit under concurrency:
+# batches admitted by max_running_requests, bounded by cuda_graph_max_bs and the
+# request-token pool, with model-side per-request buffers already allocated.
+# One-time bootstrap work such as processor loading, cache construction, audio
+# decoder/vocoder setup, and other host-side staging should stay outside the CUDA
+# graph. This helper temporarily disables the generic worker-time capture, builds
+# the shared infrastructure, restores the user's CUDA-graph setting, and returns
+# whether the caller should run init_device_graphs() after its stage-specific
+# setup is complete.
 def create_sglang_infrastructure_defer_cuda_graph(
     server_args: Any,
     gpu_id: int,
