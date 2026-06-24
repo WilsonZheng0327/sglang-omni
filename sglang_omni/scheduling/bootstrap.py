@@ -84,26 +84,34 @@ def create_sglang_infrastructure(
     )
 
 
-# note (luojiaxuan): Several Omni generation stages need model-specific setup
-# after the generic SGLang worker and memory pools exist, but before CUDA graph
-# capture freezes the decode path. Examples include attaching speech tokenizers,
-# allocating sampler/feedback buffers, compiling stage-local decode helpers, and
-# validating that the serving batch policy matches those buffers. Capture should
-# prioritize the steady-state decode shapes that users hit under concurrency:
-# batches admitted by max_running_requests, bounded by cuda_graph_max_bs and the
-# request-token pool, with model-side per-request buffers already allocated.
+# note (luojiaxuan): Some Omni generation stages cannot let the generic SGLang
+# worker capture CUDA graphs immediately during infrastructure construction. At
+# that point the shared request pools exist, but stage-owned decode state may not:
+# speech tokenizers may still need to be attached, sampler or feedback buffers
+# may not be allocated, stage-local decode helpers may not be compiled, and the
+# model-specific buffer capacity may not yet have been checked against the
+# serving batch policy. Capturing before that work would freeze replay around an
+# incomplete decode path and can make later steady-state requests either miss the
+# intended graph buckets or overrun model-side per-request buffers. The capture
+# priority should be the hot path users repeatedly pay for under concurrency:
+# decode batches admitted by max_running_requests, capped by cuda_graph_max_bs
+# and request-token slots, with all per-request model buffers already allocated.
 # One-time bootstrap work such as processor loading, cache construction, audio
-# decoder/vocoder setup, and other host-side staging should stay outside the CUDA
-# graph. This helper temporarily disables the generic worker-time capture, builds
-# the shared infrastructure, restores the user's CUDA-graph setting, and returns
-# whether the caller should run init_device_graphs() after its stage-specific
-# setup is complete.
+# decoder/vocoder setup, and other host-side staging should stay outside CUDA
+# graph coverage because graph replay will not amortize it. This helper therefore
+# disables worker-time capture only long enough to build the shared SGLang
+# infrastructure, restores the user's CUDA-graph setting, and tells the caller
+# whether it should call init_device_graphs() after its stage-specific setup.
 def create_sglang_infrastructure_defer_cuda_graph(
     server_args: Any,
     gpu_id: int,
     **kwargs: Any,
 ):
-    """Create infrastructure without initial graph capture; return whether to capture later."""
+    """Build shared SGLang infrastructure while deferring CUDA graph capture.
+
+    The caller finishes stage-specific decode setup, then runs
+    init_device_graphs() only when this returns that CUDA graphs were requested.
+    """
     want_cuda_graph = not bool(getattr(server_args, "disable_cuda_graph", False))
     if want_cuda_graph:
         server_args.disable_cuda_graph = True
