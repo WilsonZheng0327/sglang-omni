@@ -161,7 +161,7 @@ from sglang_omni.models.fun_asr.sglang_model import FunAsrNanoAudioEncoder, FunA
 2. funasr `MultiHeadedAttention.forward_qkv` 的 reshape/transpose 顺序(q/k/v split → view(b,t,h,dk) → transpose(1,2))与我的实现对比。
 3. `PositionwiseFeedForward` 的 `dropout(activation(w_1))` 顺序(eval 下 dropout=identity,应无影响)。
 
-**最终精度验证(端到端)**:stages.py 完成后,用真实音频跑 sglang 推理,与官方 `Fun-ASR/model.py` 或 `inference_vllm.py` 的转写结果对比(CER/字面一致)。测试音频:`test_data/` 下应有样本(query_to_cars.wav 4.6s、sample.wav 6.0s 之前用过)。
+**最终精度验证(端到端)✅(HTTP serve 路径已验证)**:通过 `python -m sglang_omni.cli serve --model-path <ckpt> --port 8731` 启动 HTTP 服务器(`FunASRPipelineConfig` 经 `resolve_config_cls_for_model_path` 自动发现,无需 `--config`)。OpenAI 兼容 `POST /v1/audio/transcriptions` 端点跑通:8 条 `test_data/*.opus` 并发转写全部 200,`response_format` json/text/verbose_json 均正常,单请求 wall ~0.33s,8 并发 ~1s。转写与参考 `.txt` 高度一致(标点/个别字差异)。注意:**CLI 不支持 `--mem-fraction-static`**(单阶段 ASR pipeline 无 `mem_fraction_role_to_stage`,会报 "requires a pipeline with a supported SGLang AR mem_fraction_static target")——`mem_fraction_static=0.45` 已在 `stages.py` factory 内部写死,无需 CLI 传。
 
 ### 3. sglang model arch 注册确认 ✅(本轮已完成)
 sglang 0.5.12 内置 model registry **无** `FunAsrNanoForConditionalGeneration`(qwen3_asr 有,是 sglang 自带)。已在 `sglang_model_runner.py:_register_omni_model` 的 `sglang_omni_models` 字典加入映射 → `sglang_omni.models.fun_asr.sglang_model:FunAsrNanoForConditionalGeneration`。`_register_omni_model` 在 `SGLModelRunner.__init__` 内执行(即 `create_sglang_infrastructure` 路径),GPU smoke test 已确认模型类被实例化。
