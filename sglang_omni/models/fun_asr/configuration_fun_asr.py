@@ -1,29 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""HuggingFace-style configuration + processor for Fun-ASR-Nano-2512.
-
-This mirrors ``sglang_omni/models/qwen3_asr/configuration_qwen3_asr.py`` but
-adapts it to Fun-ASR-Nano's structure:
-
-* The audio encoder is a SenseVoice-style SANM Conformer (``fun_asr_nano_encoder``),
-  not Qwen3-Omni's MoE audio encoder — so the encoder is described by a plain
-  ``PretrainedConfig`` subclass rather than a sglang config class. The encoder
-  itself is implemented in ``sglang_model.py`` (weight loading + forward); here
-  we only carry its hyperparameters for the model loader.
-* The feature extractor is ``FunAsrNanoFeatureExtractor`` — 80-mel fbank with
-  LFR (low frame rate) stacking (m=7, n=6). HF ships it as remote code
-  (``processing_fun_asr_nano.py``) which is not bundled with the checkpoint, so
-  we provide a self-contained implementation below that produces the same
-  560-dim LFR features the encoder expects (``input_size = lfr_m * n_mels``).
-* The audio placeholder token is ``<|object_ref_start|>`` (id 151646, from
-  ``config.json`` ``audio_token_index``), expanded to N copies where N is the
-  adaptor's audio-token count — the Fun-ASR analogue of Qwen3-ASR's
-  ``<|audio_pad|>`` expansion.
-
-The audio-token count is computed by :func:`fun_asr_low_frame_rate_length`
-(not the full ``fun_asr_audio_token_lengths``): the feature extractor already
-applies LFR, so ``feature_attention_mask.sum()`` is the post-LFR frame count,
-and only the adaptor's three stride-2 reductions remain.
-"""
 
 from __future__ import annotations
 

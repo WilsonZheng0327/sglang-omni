@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Shared utility functions for Fun-ASR (audio length math, etc.)."""
 
 from .audio_lengths import (
     fun_asr_audio_token_lengths,

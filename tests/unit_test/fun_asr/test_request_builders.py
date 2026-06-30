@@ -122,8 +122,7 @@ def test_fun_asr_request_builder_records_inclusive_audio_offsets(monkeypatch) ->
 
 
 def test_fun_asr_request_builder_language_prompt(monkeypatch) -> None:
-    # English target -> prompt_text "语音转写成英文："; verify the prompt carries
-    # the language suffix and the placeholder span is still replaced.
+
     monkeypatch.setattr(
         request_builders,
         "load_audio",

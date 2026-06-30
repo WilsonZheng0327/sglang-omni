@@ -1,28 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""StagePayload <-> SGLang request adapters for Fun-ASR-Nano.
-
-Fun-ASR-Nano is a Qwen3-0.6B causal LM that ingests audio as multimodal
-embeddings, structurally analogous to Qwen3-ASR but with three differences
-that this adapter accounts for:
-
-* **Audio placeholder** is ``<|object_ref_start|>`` (id 151646, the
-  ``audio_token_index`` in ``config.json``), expanded to N copies — one per
-  adaptor audio token. The HF chat template
-  (``checkpoints/.../chat_template.jinja``) emits the placeholder bare, with
-  **no** ``<|audio_start|>``/``<|audio_end|>`` wrappers (the original funasr
-  ``<|startofspeech|>``/``<|endofspeech|>`` markers are retired in the HF
-  build).
-* **Feature extractor** is the SenseVoice 80-mel WavFrontend + LFR
-  (``FunAsrNanoFeatureExtractor``), not Whisper. LFR is applied inside the
-  extractor, so ``feature_attention_mask.sum()`` is already the post-LFR frame
-  count and only the adaptor's three stride-2 reductions remain — hence
-  :func:`fun_asr_low_frame_rate_length` (not the full mel→token chain).
-* **Prompt** is the Fun-ASR ChatML instruction
-  ``语音转写成{language}：`` (``model.py:get_prompt``) placed *before* the
-  audio placeholders, with **no forced assistant prefix** — the model
-  generates the transcript directly after ``<|im_start|>assistant\n``
-  (unlike Qwen3-ASR's ``language <Lang><asr_text>`` forced prefix).
-"""
 
 from __future__ import annotations
 
@@ -51,14 +27,7 @@ from .tool_funcs.audio_lengths import fun_asr_low_frame_rate_length
 logger = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 16000
-
-# Audio placeholder token. config.json "audio_token_index": 151646 maps to
-# <|object_ref_start|> in the Qwen3 tokenizer (see tokenizer_config.json
-# added_tokens_decoder). The HF chat_template.jinja emits this token bare for
-# each audio content item; the processor expands one placeholder into N copies
-# (N = adaptor audio-token count). Here we build the N copies directly.
 _AUDIO_PAD = "<|object_ref_start|>"
-
 
 @dataclass
 class FunASRRequestData(SGLangARRequestData):
@@ -130,31 +99,21 @@ def _decode_token_ids(
 
 
 def _resolve_language(lang_raw: str | None) -> str | None:
-    """Map a request ``language`` param to a Fun-ASR target-language name.
 
-    Fun-ASR's prompt is ``语音转写：`` (transcribe as-is, multilingual) by
-    default and ``语音转写成{language}：`` to force a target language
-    (e.g. ``语音转写成英文``). ``None`` ⇒ as-is. Common short codes are mapped
-    to the Chinese language names the model was trained on; anything else is
-    passed through verbatim so callers can request e.g. ``日文``.
-    """
     if lang_raw is None:
         return None
     lang = lang_raw.strip().lower()
     if lang in ("", "auto", "null", "none"):
         return None
-    # Chinese / as-is: the bare ``语音转写：`` form is what the training data
-    # uses for Chinese audio, so we don't append a target language.
     if lang in ("zh", "cn", "chinese", "中文"):
         return None
     if lang in ("en", "english", "英文"):
         return "英文"
-    # Passthrough: allow callers to supply the exact target name.
     return lang_raw.strip()
 
 
 def _build_prompt_text(language: str | None, itn: bool, hotwords: list[str]) -> str:
-    """Reproduce ``FunAsrNano.get_prompt`` (Fun-ASR/model.py:552-563)."""
+
     prompt = ""
     if hotwords:
         joined = ", ".join(hotwords)
@@ -180,11 +139,6 @@ def make_fun_asr_scheduler_adapters(
 ) -> tuple[
     Callable[[StagePayload], FunASRRequestData], Callable[[FunASRRequestData], StagePayload]
 ]:
-    """Build (request_builder, result_adapter) for Fun-ASR-Nano.
-
-    ``feature_extractor`` is the ``FunAsrNanoFeatureExtractor`` (80-mel + LFR)
-    loaded by ``stages.create_sglang_fun_asr_executor``. It must be provided.
-    """
     if feature_extractor is None:
         raise ValueError("Fun-ASR processor is missing a feature_extractor")
 
@@ -211,11 +165,6 @@ def make_fun_asr_scheduler_adapters(
         audio_duration_s = float(len(audio) / _SAMPLE_RATE)
         fingerprint = _audio_fingerprint(audio)
 
-        # FunAsrNanoFeatureExtractor applies LFR internally, so the returned
-        # attention_mask sums to the post-LFR frame count (T_lfr). Only the
-        # adaptor's three stride-2 reductions remain → fun_asr_low_frame_rate_length.
-        # No 30s windowing: Fun-ASR's encoder is variable-length (unlike
-        # Whisper), so padding="longest" pads to this clip's true length only.
         extracted = feature_extractor(
             audio,
             sampling_rate=_SAMPLE_RATE,
@@ -251,11 +200,7 @@ def make_fun_asr_scheduler_adapters(
                 "feature_attention_mask": feature_attention_mask,
             },
         )
-        # general_mm_embed_routine locates audio positions by matching each
-        # item's pad_value against input_ids. The omni scheduler does not run
-        # pad_input_ids for us, so compute the pad_value, replace the N
-        # <|object_ref_start|> placeholders with it, and record the placeholder
-        # span as item.offsets. SGLang treats offsets as inclusive.
+
         audio_item.set_pad_value()
         if audio_pad_token_id not in input_ids:
             raise RuntimeError(
@@ -274,18 +219,12 @@ def make_fun_asr_scheduler_adapters(
             num_image_tokens=num_audio_tokens,
         )
         mm_inputs.audio_token_id = audio_pad_token_id
-        # Fun-ASR's Qwen3 LLM uses plain 1-D positions (rope_type "default",
-        # not mrope). sglang's prefill indexes mm_input.mrope_positions during
-        # prefill and does not compute a default, so supply degenerate [3, seq]
-        # positions broadcasting the text position — same as Qwen3-ASR's ASR
-        # degenerate MRoPE.
+
         seq_len = len(input_ids)
         positions = torch.arange(seq_len, dtype=torch.long)
         mm_inputs.mrope_positions = positions.unsqueeze(0).expand(3, -1).clone()
         mm_inputs.mrope_position_delta = torch.tensor([0], dtype=torch.long)
 
-        # Fun-ASR's reference inference (Fun-ASR/model.py) calls llm.generate
-        # with no sampling args ⇒ greedy. Default to greedy; allow override.
         temperature = float(params.get("temperature") or 0.0)
         request_max_new_tokens = int(params.get("max_new_tokens") or max_new_tokens)
         logger.debug(
@@ -326,9 +265,7 @@ def make_fun_asr_scheduler_adapters(
     def result_adapter(data: FunASRRequestData) -> StagePayload:
         payload = data.stage_payload
         output_ids = list(data.output_ids or [])
-        # Fun-ASR generates the transcript directly after <|im_start|>assistant\n
-        # — no forced prefix marker to strip (unlike Qwen3-ASR's <asr_text>).
-        # skip_special_tokens=True drops the trailing <|im_end|>.
+
         text = _decode_token_ids(tokenizer, output_ids, skip_special_tokens=True)
         engine_time_s = (
             time.perf_counter() - data.engine_start_s if data.engine_start_s else 0.0

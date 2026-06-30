@@ -1,37 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Fun-ASR-Nano model for SGLang.
-
-Implements ``FunAsrNanoForConditionalGeneration`` — the audio encoder +
-adaptor + Qwen3 LLM — mirroring the canonical Fun-ASR structure so the
-HuggingFace-adapted checkpoint (``checkpoints/Fun-ASR-Nano-2512``) loads
-bit-for-bit. The forward is the multimodal splice pattern from
-``qwen3_asr/sglang_model.py``: encoder + adaptor produce audio embeddings,
-``general_mm_embed_routine`` scatters them into the ``<|object_ref_start|>``
-placeholder positions of the Qwen3 LLM.
-
-Architecture (verified against funasr 1.3.14 ``sense_voice/model.py`` +
-``llm_asr/adaptor.py`` + ``fun_asr_nano/inference_vllm.py`` and the C++
-reference port ``Fun-ASR/runtime/llama.cpp/funasr-cli/funasr-cli.cpp``):
-
-* **Audio encoder** = ``SenseVoiceEncoderSmall`` (SANM Conformer):
-  ``encoders0`` (1 block, 560→512, attn has NO residual because in_size≠size)
-  + ``encoders`` (49 blocks, 512) + ``after_norm`` + ``tp_encoders`` (20
-  blocks, 512) + ``tp_norm``. Input is scaled by ``sqrt(output_size)`` then
-  sinusoidal positional encoding (depth=input_size=560) is added. SANM
-  self-attention = merged ``linear_q_k_v`` + depthwise ``fsmn_block`` Conv1d
-  (k=11, pad 5+5) residual on v + scaled-dot-product attention (4 heads,
-  dk=128) + ``linear_out``.
-* **Audio adaptor** = funasr ``Transformer`` adaptor (downsample_rate=1 ⇒
-  NO internal downsampling): ``linear1`` (512→2048) → relu → ``linear2``
-  (2048→1024) → 2 standard pre-norm transformer layers (separate
-  linear_q/k/v/out, 8 heads, dk=128, ffn 1024→256→1024). Returns FULL T_lfr.
-* **Low frame rate** is a TRUNCATION, not a pool: the adaptor returns all
-  T_lfr frames; we slice ``adaptor_out[:fake_token_len]`` where
-  ``fake_token_len = fun_asr_low_frame_rate_length(T_lfr)`` (3× ceil(x/2)).
-  This matches ``model.py:480``, ``inference_vllm.py:422``, and
-  ``funasr-cli.cpp:149`` exactly — the first N bidirectional-attention
-  frames are fed to the LLM.
-"""
 
 from __future__ import annotations
 
@@ -69,13 +36,6 @@ logger = logging.getLogger(__name__)
 
 
 class SinusoidalPositionEncoder(nn.Module):
-    """Sinusoidal positional encoding (funasr sense_voice.SinusoidalPositionEncoder).
-
-    ``forward(x) = x + pe`` where ``pe`` has depth = ``x.size(-1)`` and
-    positions 1..T. NO input scaling here — the sqrt(output_size) scaling is
-    applied by the encoder forward (SenseVoiceEncoderSmall.forward) before
-    calling this, matching funasr.
-    """
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, timesteps, input_dim = x.size()
@@ -96,13 +56,6 @@ class SinusoidalPositionEncoder(nn.Module):
 
 
 class MultiHeadedAttentionSANM(nn.Module):
-    """SANM self-attention: scaled-dot-product MHA + depthwise-FSMN memory.
-
-    Matches funasr ``sense_voice.MultiHeadedAttentionSANM``: merged
-    ``linear_q_k_v`` (in_feat→n_feat*3), separate FSMN depthwise Conv1d on v
-    (kernel_size, symmetric pad, groups=n_feat, bias=False) with a residual
-    ``+v``, and ``linear_out``. Returns ``att_outs + fsmn_memory``.
-    """
 
     def __init__(
         self,
@@ -163,13 +116,6 @@ class MultiHeadedAttentionSANM(nn.Module):
 
 
 class EncoderLayerSANM(nn.Module):
-    """Pre-norm SANM encoder layer.
-
-    When ``in_size != size`` (the input projection block ``encoders0``) the
-    attention sublayer has NO residual (dimensions differ); the FFN sublayer
-    always has a residual. Matches funasr ``EncoderLayerSANM`` with
-    ``normalize_before=True, concat_after=False``.
-    """
 
     def __init__(
         self,
@@ -217,14 +163,6 @@ class PositionwiseFeedForward(nn.Module):
 
 
 class FunAsrNanoAudioEncoder(nn.Module):
-    """SenseVoice-style SANM Conformer encoder (funasr SenseVoiceEncoderSmall).
-
-    Input: ``[B, T, input_size=560]`` LFR features. Output: ``[B, T, output_size=512]``.
-    The forward applies the sqrt(output_size) input scaling + sinusoidal PE,
-    then encoders0 (560→512) → encoders (×49, 512) → after_norm →
-    tp_encoders (×20, 512) → tp_norm. No masking (single unpadded valid
-    sequence per item); FSMN padding is internal to the attention.
-    """
 
     def __init__(
         self,
@@ -309,8 +247,6 @@ class FunAsrNanoAudioEncoder(nn.Module):
 
 
 class MultiHeadedAttention(nn.Module):
-    """Standard scaled-dot-product MHA with separate q/k/v/out (funasr
-    transformer.attention.MultiHeadedAttention). Used by the adaptor blocks."""
 
     def __init__(
         self,
@@ -343,7 +279,6 @@ class MultiHeadedAttention(nn.Module):
 
 
 class AdaptorEncoderLayer(nn.Module):
-    """Pre-norm transformer layer (funasr transformer.encoder.EncoderLayer)."""
 
     def __init__(
         self,
@@ -370,15 +305,6 @@ class AdaptorEncoderLayer(nn.Module):
 
 
 class FunAsrNanoAdaptor(nn.Module):
-    """Low-frame-rate adaptor (funasr Transformer adaptor, downsample_rate=1).
-
-    linear1 (encoder_dim→ffn_dim) → relu → linear2 (ffn_dim→llm_dim) → N
-    pre-norm transformer blocks. With downsample_rate=1 there is NO internal
-    downsampling — the output keeps the input frame count. The 3× stride-2
-    "low frame rate" reduction is applied externally as a truncation
-    (``adaptor_out[:fake_token_len]``), matching the official Fun-ASR
-    inference paths.
-    """
 
     def __init__(
         self,
@@ -397,8 +323,7 @@ class FunAsrNanoAdaptor(nn.Module):
         self.linear1 = nn.Linear(encoder_dim * self.k, ffn_dim)
         self.relu = nn.ReLU()
         self.linear2 = nn.Linear(ffn_dim, llm_dim)
-        # PositionwiseFeedForward hidden = llm_dim // 4 (matches checkpoint
-        # feed_forward.w_1 (256, 1024), w_2 (1024, 256)).
+
         ffn_hidden = llm_dim // 4
         self.blocks = nn.ModuleList(
             [
@@ -413,7 +338,6 @@ class FunAsrNanoAdaptor(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, T, encoder_dim]. downsample_rate=1 ⇒ no view/pad downsampling.
         x = self.linear1(x)
         x = self.relu(x)
         x = self.linear2(x)
@@ -422,18 +346,9 @@ class FunAsrNanoAdaptor(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Top-level model
-# ---------------------------------------------------------------------------
-
+# Final Model
 
 class FunAsrNanoForConditionalGeneration(nn.Module):
-    """Fun-ASR-Nano: SANM encoder + Transformer adaptor + Qwen3 LLM.
-
-    The audio tower (encoder + adaptor) maps LFR features to LLM-dim
-    embeddings; ``general_mm_embed_routine`` splices them into the Qwen3
-    ``<|object_ref_start|>`` placeholder positions during prefill.
-    """
 
     default_bitsandbytes_target_modules = [
         ".gate_proj.",
@@ -495,13 +410,7 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
         return self.pattern.pad_input_tokens(input_ids, mm_inputs)
 
     def get_audio_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
-        """Encode audio items → [total_audio_tokens, llm_dim] embeddings.
 
-        For each item: select valid LFR frames (via feature_attention_mask),
-        run encoder + adaptor (full T_lfr), then truncate to
-        ``fun_asr_low_frame_rate_length(T_lfr)`` frames (the official
-        ``use_low_frame_rate`` truncation). Concatenate across items in order.
-        """
         device = next(self.audio_encoder.parameters()).device
         dtype = next(self.audio_encoder.parameters()).dtype
 
@@ -566,12 +475,6 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
             ):
                 continue
 
-            # Strip the HF top-level "model." wrapper:
-            #   model.audio_encoder.*      → audio_encoder.*
-            #   model.audio_adaptor.*      → audio_adaptor.*
-            #   model.language_model.*     → language_model.model.* (Qwen3ForCausalLM
-            #                                 wraps Qwen3Model under self.model)
-            #   lm_head.weight              → tied (skipped above)
             if name.startswith("model.audio_encoder."):
                 name = name.replace("model.audio_encoder.", "audio_encoder.", 1)
                 is_llm = False
@@ -582,13 +485,9 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
                 name = name.replace("model.language_model.", "language_model.model.", 1)
                 is_llm = True
             else:
-                # Already-unprefixed LLM keys (e.g. "lm_head.weight") or
-                # anything else: leave as-is and try a direct load.
                 is_llm = False
 
             if is_llm:
-                # Stack q/k/v → qkv_proj and gate/up → gate_up_proj for sglang's
-                # Qwen3ForCausalLM (merged linears).
                 stacked = False
                 for param_name, weight_name, shard_id in llm_stacked_params:
                     if weight_name not in name:
