@@ -237,6 +237,12 @@ DEFAULT_ASR_TRANSCRIBE_CONCURRENCY = int(
     os.getenv("QWEN3_ASR_CONCURRENCY", os.getenv("SEEDTTS_ASR_CONCURRENCY", "32"))
 )
 
+FUN_ASR_MODEL_PATH = os.getenv("FUN_ASR_MODEL_PATH", "FunAudio/Fun-ASR-Nano")
+FUN_ASR_REQUEST_TIMEOUT_S = 300
+# Fun-ASR-Nano transcribes with greedy decoding (temperature=0.0); 256 tokens
+# comfortably covers SeedTTS EN clips which Qwen3-ASR caps at 128.
+FUN_ASR_MAX_NEW_TOKENS = int(os.getenv("FUN_ASR_MAX_NEW_TOKENS", "256"))
+
 
 def load_qwen3_asr(
     router_port: int,
@@ -327,6 +333,131 @@ def transcribe(asr: dict, wav_path: str, lang: str, device: str) -> str:
     if asr["type"] == "omni_whisper":
         return _transcribe_omni_whisper(asr, wav_path, lang)
     raise ValueError(f"Unknown ASR type: {asr['type']}")
+
+
+# ---------------------------------------------------------------------------
+# ASR send_fn for the concurrency-eval path (BenchmarkRunner)
+# ---------------------------------------------------------------------------
+#
+# make_asr_send_fn backs the SeedTTS ASR concurrency/CI eval
+# (benchmarks/eval/benchmark_qwen3_asr_concurrency.py). It is shared by
+# Qwen3-ASR and Fun-ASR so a single eval entry supports both models; the only
+# per-model differences are max_new_tokens and whether to send temperature.
+
+
+@dataclass
+class AsrBackendConfig:
+    """Per-model knobs for the /v1/audio/transcriptions send_fn.
+
+    Qwen3-ASR must NOT send temperature (the server bumps 0 -> 0.01; pure greedy
+    degenerates). Fun-ASR-Nano transcribes greedily at temperature=0.0, so it
+    sends the field explicitly.
+    """
+
+    model_path: str
+    max_new_tokens: int
+    send_temperature: bool
+    temperature: float = 0.0
+
+
+def _is_fun_asr_model(model_path: str) -> bool:
+    lowered = model_path.lower()
+    return "fun" in lowered and "asr" in lowered
+
+
+def _resolve_asr_backend_config(
+    model_path: str,
+    *,
+    max_new_tokens: int | None = None,
+) -> AsrBackendConfig:
+    """Pick the ASR backend config for ``model_path``.
+
+    Fun-ASR-Nano is detected by name; anything else falls back to Qwen3-ASR
+    (the historical default), including whisper paths which never reach here
+    because the concurrency eval targets the Omni ASR router directly.
+    """
+    if _is_fun_asr_model(model_path):
+        return AsrBackendConfig(
+            model_path=model_path,
+            max_new_tokens=max_new_tokens
+            if max_new_tokens is not None
+            else FUN_ASR_MAX_NEW_TOKENS,
+            send_temperature=True,
+            temperature=0.0,
+        )
+    return AsrBackendConfig(
+        model_path=model_path,
+        max_new_tokens=max_new_tokens
+        if max_new_tokens is not None
+        else QWEN3_ASR_MAX_NEW_TOKENS,
+        send_temperature=False,
+    )
+
+
+def make_asr_send_fn(
+    model_name: str,
+    api_url: str,
+    *,
+    lang: str = "en",
+    max_new_tokens: int | None = None,
+) -> SendFn:
+    """Return a *send_fn(session, sample) -> RequestResult* that transcribes one
+    SeedTTS reference clip via the Omni ``/v1/audio/transcriptions`` endpoint.
+
+    Shared by Qwen3-ASR and Fun-ASR-Nano. The backend is resolved from
+    ``model_name``: Qwen3-ASR omits ``temperature`` (pure greedy degenerates;
+    the server bumps it to 0.01), while Fun-ASR-Nano sends ``temperature=0.0``
+    (greedy is its correct decoding mode). ``max_new_tokens`` defaults per
+    backend (Qwen3-ASR 128, Fun-ASR-Nano 256) when not given. Request timeout
+    is governed by the ``BenchmarkRunner``'s session-level ``timeout_s``.
+    """
+
+    cfg = _resolve_asr_backend_config(model_name, max_new_tokens=max_new_tokens)
+
+    async def send_fn(
+        session: aiohttp.ClientSession, sample: SampleInput
+    ) -> RequestResult:
+        result = RequestResult(request_id=sample.sample_id)
+        try:
+            with open(sample.ref_audio, "rb") as audio_file:
+                audio_bytes = audio_file.read()
+        except OSError as exc:
+            result.error = str(exc)
+            return result
+        result.audio_duration_s = get_wav_duration(audio_bytes)
+
+        form = aiohttp.FormData()
+        form.add_field("model", cfg.model_path)
+        form.add_field("language", "en" if lang == "en" else lang)
+        form.add_field("response_format", "json")
+        form.add_field("max_new_tokens", str(cfg.max_new_tokens))
+        if cfg.send_temperature:
+            form.add_field("temperature", str(cfg.temperature))
+        form.add_field(
+            "file",
+            audio_bytes,
+            filename=os.path.basename(sample.ref_audio),
+            content_type="audio/wav",
+        )
+
+        start_time = time.perf_counter()
+        try:
+            async with session.post(api_url, data=form) as response:
+                if response.status != 200:
+                    result.error = f"HTTP {response.status}: {await response.text()}"
+                else:
+                    payload = await response.json()
+                    result.text = str(payload.get("text", ""))
+                    result.is_success = True
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            result.error = str(exc)
+        finally:
+            result.latency_s = time.perf_counter() - start_time
+        if result.is_success and result.audio_duration_s > 0:
+            result.rtf = result.latency_s / result.audio_duration_s
+        return result
+
+    return send_fn
 
 
 def transcribe_and_compute_wer(

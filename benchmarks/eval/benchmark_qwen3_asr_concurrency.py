@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3-ASR concurrency-scaling benchmark on SeedTTS EN (issue #646).
+"""ASR concurrency-scaling benchmark on SeedTTS EN (issue #646).
 
-Sweeps ASR transcription fan-out (concurrency) against a *running* Qwen3-ASR
+Sweeps ASR transcription fan-out (concurrency) against a *running* ASR
 SGLang Omni router and reports, for each concurrency level, the metrics tracked
 in issue #646: corpus/per-sample WER, wall-clock, throughput, latency
 percentiles, RTF, and per-worker routing balance. This produces the repeatable
@@ -10,6 +10,10 @@ decide the right ASR fan-out for SeedTTS EN transcription / WER workloads.
 
 This script transcribes the SeedTTS *reference* clips directly (no TTS
 generation step), so it isolates ASR behavior from TTS.
+
+Both Qwen3-ASR and Fun-ASR-Nano are supported via ``--model``. The per-model
+HTTP knobs (``max_new_tokens``, whether to send ``temperature``) live in
+``benchmarks.tasks.tts.make_asr_send_fn``; this file is the eval checklist.
 
 ``run_asr_transcription`` + ``build_asr_eval_results`` are the shared
 transcription/scoring path; the Qwen3-ASR correctness gate
@@ -34,6 +38,14 @@ Usage:
         --concurrencies 1,2,4,8,16,32,64 \
         --repeats 3
 
+    # Same sweep against Fun-ASR-Nano:
+    python -m sglang_omni.cli serve \
+        --model-path FunAudio/Fun-ASR-Nano \
+        --port 8000
+    python -m benchmarks.eval.benchmark_qwen3_asr_concurrency \
+        --model fun_asr --port 8000 \
+        --concurrencies 1,2,4,8,16,32,64 --repeats 3
+
     # Quick local smoke on a 20-sample subset:
     python -m benchmarks.eval.benchmark_qwen3_asr_concurrency \
         --port 8000 --max-samples 20 --concurrencies 2,32 --repeats 3
@@ -46,87 +58,27 @@ import asyncio
 import json
 import os
 import statistics
-import time
 
-import aiohttp
 import requests
 from jiwer import process_words
 
 from benchmarks.benchmarker.data import RequestResult
-from benchmarks.benchmarker.runner import BenchmarkRunner, RunConfig, SendFn
-from benchmarks.benchmarker.utils import get_wav_duration
+from benchmarks.benchmarker.runner import BenchmarkRunner, RunConfig
 from benchmarks.dataset.prepare import DATASETS
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
 from benchmarks.metrics.performance import compute_speed_metrics
 from benchmarks.metrics.wer import calculate_asr_speed_metrics, calculate_wer_metrics
 from benchmarks.tasks.tts import (
     DEFAULT_ASR_TRANSCRIBE_CONCURRENCY,
-    QWEN3_ASR_MAX_NEW_TOKENS,
+    FUN_ASR_MODEL_PATH,
     QWEN3_ASR_MODEL_PATH,
     QWEN3_ASR_REQUEST_TIMEOUT_S,
     SampleOutput,
+    make_asr_send_fn,
     normalize_text,
 )
 
 DEFAULT_CONCURRENCIES = "1,2,4,8,16,32,64"
-
-
-def make_asr_send_fn(
-    model_name: str,
-    api_url: str,
-    *,
-    lang: str = "en",
-    max_new_tokens: int = QWEN3_ASR_MAX_NEW_TOKENS,
-) -> SendFn:
-    """Return a *send_fn(session, sample) -> RequestResult* that transcribes one
-    SeedTTS reference clip via the Omni ``/v1/audio/transcriptions`` endpoint.
-
-    Note: do NOT send temperature=0 — Qwen3-ASR degenerates under pure greedy
-    (the server bumps it to 0.01). ``language`` selects the forced prefix.
-    """
-
-    async def send_fn(
-        session: aiohttp.ClientSession, sample: SampleInput
-    ) -> RequestResult:
-        result = RequestResult(request_id=sample.sample_id)
-        try:
-            with open(sample.ref_audio, "rb") as audio_file:
-                audio_bytes = audio_file.read()
-        except OSError as exc:
-            result.error = str(exc)
-            return result
-        result.audio_duration_s = get_wav_duration(audio_bytes)
-
-        form = aiohttp.FormData()
-        form.add_field("model", model_name)
-        form.add_field("language", "en" if lang == "en" else lang)
-        form.add_field("response_format", "json")
-        form.add_field("max_new_tokens", str(max_new_tokens))
-        form.add_field(
-            "file",
-            audio_bytes,
-            filename=os.path.basename(sample.ref_audio),
-            content_type="audio/wav",
-        )
-
-        start_time = time.perf_counter()
-        try:
-            async with session.post(api_url, data=form) as response:
-                if response.status != 200:
-                    result.error = f"HTTP {response.status}: {await response.text()}"
-                else:
-                    payload = await response.json()
-                    result.text = str(payload.get("text", ""))
-                    result.is_success = True
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            result.error = str(exc)
-        finally:
-            result.latency_s = time.perf_counter() - start_time
-        if result.is_success and result.audio_duration_s > 0:
-            result.rtf = result.latency_s / result.audio_duration_s
-        return result
-
-    return send_fn
 
 
 async def run_asr_transcription(
@@ -139,14 +91,19 @@ async def run_asr_transcription(
     concurrency: int = DEFAULT_ASR_TRANSCRIBE_CONCURRENCY,
     warmup: int = 0,
     request_timeout_s: int = QWEN3_ASR_REQUEST_TIMEOUT_S,
+    max_new_tokens: int | None = None,
     disable_tqdm: bool = True,
 ) -> tuple[list[RequestResult], float]:
     """Transcribe ``samples`` against a running ASR router at one concurrency.
 
     Returns ``(outputs, wall_clock_s)`` via the shared ``BenchmarkRunner``.
+    ``max_new_tokens=None`` lets ``make_asr_send_fn`` pick the backend default
+    (Qwen3-ASR 128, Fun-ASR-Nano 256).
     """
     api_url = f"http://{host}:{port}/v1/audio/transcriptions"
-    send_fn = make_asr_send_fn(model_path, api_url, lang=lang)
+    send_fn = make_asr_send_fn(
+        model_path, api_url, lang=lang, max_new_tokens=max_new_tokens
+    )
     runner = BenchmarkRunner(
         RunConfig(
             max_concurrency=concurrency,
@@ -291,6 +248,7 @@ async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
         model_path=args.model_path,
         lang=args.lang,
         concurrency=concurrency,
+        max_new_tokens=args.max_new_tokens,
     )
     after = _fetch_worker_snapshot(args.host, args.port)
 
@@ -383,7 +341,7 @@ def parse_args() -> argparse.Namespace:
         "--port",
         type=int,
         required=True,
-        help="Port of the running Qwen3-ASR SGLang Omni router.",
+        help="Port of the running ASR SGLang Omni router.",
     )
     parser.add_argument(
         "--meta",
@@ -404,9 +362,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
+        "--model",
+        choices=["qwen3_asr", "fun_asr"],
+        default="qwen3_asr",
+        help="ASR backend: qwen3_asr (Qwen3-ASR, default) or fun_asr (Fun-ASR-Nano). "
+        "Sets the default --model-path and max_new_tokens when those are not overridden.",
+    )
+    parser.add_argument(
         "--model-path",
-        default=QWEN3_ASR_MODEL_PATH,
-        help="ASR model id served by the router.",
+        default=None,
+        help="ASR model id served by the router. Defaults to the --model backend's "
+        "standard path (Qwen3-ASR-1.7B or Fun-ASR-Nano).",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=0,
+        help="Override max_new_tokens (0 = backend default: Qwen3-ASR 128, Fun-ASR-Nano 256).",
     )
     parser.add_argument(
         "--warmup",
@@ -433,6 +405,7 @@ async def _sweep(args, samples, concurrencies: list[int]) -> list[dict]:
                 model_path=args.model_path,
                 lang=args.lang,
                 concurrency=concurrency,
+                max_new_tokens=args.max_new_tokens,
             )
         repeats: list[dict] = []
         for repeat in range(1, args.repeats + 1):
@@ -456,6 +429,12 @@ async def _sweep(args, samples, concurrencies: list[int]) -> list[dict]:
 
 def main() -> None:
     args = parse_args()
+    if args.model_path is None:
+        args.model_path = (
+            FUN_ASR_MODEL_PATH if args.model == "fun_asr" else QWEN3_ASR_MODEL_PATH
+        )
+    args.max_new_tokens = args.max_new_tokens if args.max_new_tokens > 0 else None
+
     concurrencies = [int(c) for c in args.concurrencies.split(",") if c.strip()]
     max_samples = args.max_samples if args.max_samples > 0 else None
 
@@ -475,7 +454,9 @@ def main() -> None:
             "port": args.port,
             "meta": args.meta,
             "lang": args.lang,
+            "model": args.model,
             "model_path": args.model_path,
+            "max_new_tokens": args.max_new_tokens,
             "num_samples": len(samples),
             "concurrencies": concurrencies,
             "repeats": args.repeats,
