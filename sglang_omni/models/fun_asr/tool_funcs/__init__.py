@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# Author:
+# PoTaTo-Mika: https://github.com/PoTaTo-Mika
 
 from .audio_lengths import (
     fun_asr_audio_token_lengths,

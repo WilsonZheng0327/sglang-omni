@@ -239,8 +239,8 @@ DEFAULT_ASR_TRANSCRIBE_CONCURRENCY = int(
 
 FUN_ASR_MODEL_PATH = os.getenv("FUN_ASR_MODEL_PATH", "FunAudio/Fun-ASR-Nano")
 FUN_ASR_REQUEST_TIMEOUT_S = 300
-# Fun-ASR-Nano transcribes with greedy decoding (temperature=0.0); 256 tokens
-# comfortably covers SeedTTS EN clips which Qwen3-ASR caps at 128.
+# note (PoTaTo-Mika): Fun-ASR-Nano transcribes with greedy decoding
+# (temperature=0.0); 256 tokens comfortably covers SeedTTS EN clips.
 FUN_ASR_MAX_NEW_TOKENS = int(os.getenv("FUN_ASR_MAX_NEW_TOKENS", "256"))
 
 
@@ -333,16 +333,6 @@ def transcribe(asr: dict, wav_path: str, lang: str, device: str) -> str:
     if asr["type"] == "omni_whisper":
         return _transcribe_omni_whisper(asr, wav_path, lang)
     raise ValueError(f"Unknown ASR type: {asr['type']}")
-
-
-# ---------------------------------------------------------------------------
-# ASR send_fn for the concurrency-eval path (BenchmarkRunner)
-# ---------------------------------------------------------------------------
-#
-# make_asr_send_fn backs the SeedTTS ASR concurrency/CI eval
-# (benchmarks/eval/benchmark_qwen3_asr_concurrency.py). It is shared by
-# Qwen3-ASR and Fun-ASR so a single eval entry supports both models; the only
-# per-model differences are max_new_tokens and whether to send temperature.
 
 
 @dataclass
