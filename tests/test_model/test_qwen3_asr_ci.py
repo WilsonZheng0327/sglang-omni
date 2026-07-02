@@ -38,13 +38,13 @@ QWEN3_ASR_WARMUP_REQUESTS = QWEN3_ASR_CONCURRENCY * 2
 SEEDTTS_ASR_CORRECTNESS_SAMPLES = 1088
 
 # P95 reference values calibrated by tune.py (worst-of-N).
-SEEDTTS_ASR_CORPUS_WER_MAX = 0.0139
-SEEDTTS_ASR_SAMPLE_WER_MAX = 0.3077
-QWEN3_ASR_THROUGHPUT_MIN = 71.32958425239097
-QWEN3_ASR_LATENCY_MEAN_MAX_S = 0.44614061961072043
-QWEN3_ASR_LATENCY_P95_MAX_S = 0.5971983068156986
-QWEN3_ASR_RTF_MEAN_MAX = 0.09664494674108047
-QWEN3_ASR_RTF_P95_MAX = 0.1345
+SEEDTTS_ASR_CORPUS_WER_MAX = 0.0138
+SEEDTTS_ASR_SAMPLE_WER_MAX = 0.2858
+QWEN3_ASR_THROUGHPUT_MIN = 93.506
+QWEN3_ASR_LATENCY_MEAN_MAX_S = 0.34028885086916166
+QWEN3_ASR_LATENCY_P95_MAX_S = 0.455045491317287
+QWEN3_ASR_RTF_MEAN_MAX = 0.0737
+QWEN3_ASR_RTF_P95_MAX = 0.1018
 
 THRESHOLD_SLACK_HIGHER = 0.9
 THRESHOLD_SLACK_LOWER = 1.1
@@ -167,7 +167,16 @@ def test_qwen3_asr_matches_seedtts_reference_text(
     print_asr_speed_summary(speed, QWEN3_ASR_CI_MODEL_PATH)
 
     results_path = tmp_path_factory.getbasetemp() / "qwen3_asr_results.json"
-    results_path.write_text(json.dumps({"summary": summary, "speed": speed}, indent=2))
+    results_path.write_text(
+        json.dumps(
+            {
+                "summary": summary,
+                "speed": speed,
+                "router_ready_s": qwen3_asr_router_server.router_ready_s,
+            },
+            indent=2,
+        )
+    )
 
     corpus_wer = summary["corpus_wer"]
     throughput_samples_per_s = speed["throughput_samples_per_s"]
