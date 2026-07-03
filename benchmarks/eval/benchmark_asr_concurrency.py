@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Author:
 # PoTaTo-Mika: https://github.com/PoTaTo-Mika
-"""ASR concurrency-scaling benchmark on SeedTTS EN (issue #646 & #898).
+"""ASR concurrency-scaling benchmark on SeedTTS EN (issue #646).
 
 Sweeps ASR transcription fan-out (concurrency) against a running ASR
 SGLang Omni router and reports, for each concurrency level, the metrics tracked
@@ -13,97 +13,53 @@ decide the right ASR fan-out for SeedTTS EN transcription / WER workloads.
 This script transcribes the SeedTTS reference clips directly (no TTS
 generation step), so it isolates ASR behavior from TTS.
 
-Both Qwen3-ASR and Fun-ASR-Nano are supported. The per-model HTTP knobs
-(max_new_tokens, whether to send temperature) live in
-benchmarks.tasks.tts.make_asr_send_fn; this file is the eval checklist.
-
-run_asr_transcription and build_asr_eval_results are the shared
-transcription/scoring path; the Qwen3-ASR correctness gate
-(tests/test_model/test_qwen3_asr_ci.py) imports them so the gate is just
-this benchmark run plus thresholds. Both reuse the benchmark framework
-abstractions (BenchmarkRunner, benchmarks.metrics).
-
 Usage:
 
-1. Download the test set once:
-
+    # Download the test set once:
     python -m benchmarks.dataset.prepare --dataset seedtts
 
-2. Full sweep (the benchmark starts/stops the ASR server itself):
-
-    python -m benchmarks.eval.benchmark_asr_concurrency \
+    # Launch Qwen3-ASR (DP=2 to match TTS CI):
+    python -m sglang_omni.cli serve \
         --model-path Qwen/Qwen3-ASR-1.7B \
+        --dp-size 2 \
+        --port 8000
+
+    # Sweep the issue's matrix (3 repeats each) over the full SeedTTS EN set:
+    python -m benchmarks.eval.benchmark_asr_concurrency \
         --port 8000 \
         --concurrencies 1,2,4,8,16,32,64 \
         --repeats 3
 
-    # Same sweep against Fun-ASR-Nano:
+    # Quick local smoke on a 20-sample subset:
     python -m benchmarks.eval.benchmark_asr_concurrency \
-        --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000 \
+        --port 8000 --max-samples 20 --concurrencies 2,32 --repeats 3
+
+    # Fun-ASR-Nano on the same set:
+    python -m sglang_omni.cli serve \
+        --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000
+    python -m benchmarks.eval.benchmark_asr_concurrency \
+        --port 8000 --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf \
         --concurrencies 1,2,4,8,16,32,64 --repeats 3
 
-3. Against an already-running server (skip server lifecycle):
+Reference Results (SeedTTS EN Full set, 1088 clips, bf16, RTX 4080 SUPER 32G,
+3 repeats + warmup per concurrency, concurrency swept 1/2/4/8/16/32/64):
 
-    python -m sglang_omni.cli serve --model-path Qwen/Qwen3-ASR-1.7B --port 8000
-    python -m benchmarks.eval.benchmark_asr_concurrency \
-        --use-existing-server --port 8000 \
-        --concurrencies 1,2,4,8,16,32,64 --repeats 3
+  Qwen3-ASR-1.7B (max_new_tokens from pipeline config; no temperature sent):
+    conc=32 -> wall 19.7s, thrpt 55.1/s, lat_mean 0.579s, rtf_mean 0.0359,
+    corpus_wer 0.0130 (below the 0.0139 CI gate). conc=64 shows 72 skipped
+    requests (single-GPU saturation under DP=1, not a model defect).
 
-4. Quick local smoke on a 20-sample subset:
+  Fun-ASR-Nano (greedy temperature=0.0, max_new_tokens=256, both from the
+  FunASRPipelineConfig defaults; the HTTP request omits both):
+    conc=32 -> wall 26.7s, thrpt 40.7/s, lat_mean 0.081s (conc=1), rtf_mean
+    0.0175, corpus_wer 0.0171 (stable across all concurrency levels, 0
+    skipped). Lower throughput than Qwen3-ASR but roughly 2x lower conc=1
+    latency and RTF.
 
-    python -m benchmarks.eval.benchmark_asr_concurrency \
-        --use-existing-server --port 8000 \
-        --max-samples 20 --concurrencies 2,32 --repeats 3
-
-Reference Results
-
-Reproducibility references for the FULL eval set — NOT CI thresholds.
-CI runs on a subset and has its own thresholds (tests/test_model/test_qwen3_asr_ci.py).
-
-Benchmark: SeedTTS EN  |  Dataset: seed-tts-eval, full set (EN=1088)
-Hardware:  1 x NVIDIA RTX 4080 SUPER, 32 GB (single GPU, DP=1)
-Last verified: 2026-06-30
-
-Run config (aligned): dtype bf16; 3 repeats + 1 discarded warmup per level;
-concurrency 1/2/4/8/16/32/64; audio duration mean 4.69s, median 4.53s,
-max 8.81s, total 85.1 min. Qwen3-ASR uses max_new_tokens=128 and sends no
-temperature (server bumps 0 to 0.01); Fun-ASR-Nano uses max_new_tokens=256
-and sends temperature=0.0 (greedy). Both transcribe the same 1088 EN clips.
-
-Qwen3-ASR-1.7B (Qwen/Qwen3-ASR-1.7B)
-
-| conc | wall(s) mean | thrpt/s mean | thrpt/s best | lat_mean(s) | lat_p95(s) | rtf_mean | rtf_p95 | corpus_wer | max_wer | skipped |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1  | 180.46 | 6.03  | 6.08  | 0.165 | 0.201 | 0.0359 | 0.0460 | 0.0133 | 0.2727 | 0  |
-| 2  | 106.87 | 10.19 | 10.49 | 0.196 | 0.237 | 0.0426 | 0.0550 | 0.0134 | 0.2500 | 0  |
-| 4  | 67.62  | 16.09 | 16.38 | 0.248 | 0.323 | 0.0539 | 0.0741 | 0.0136 | 0.2727 | 0  |
-| 8  | 39.37  | 27.64 | 27.98 | 0.288 | 0.383 | 0.0625 | 0.0854 | 0.0131 | 0.1818 | 0  |
-| 16 | 26.14  | 41.62 | 41.94 | 0.383 | 0.498 | 0.0829 | 0.1142 | 0.0133 | 0.2500 | 0  |
-| 32 | 19.76  | 55.07 | 55.68 | 0.577 | 0.759 | 0.1247 | 0.1678 | 0.0130 | 0.1818 | 0  |
-| 64 | 19.45  | 52.79 | 52.98 | 1.187 | 1.423 | 0.2587 | 0.3471 | 0.0137 | 0.2000 | 72 |
-
-Fun-ASR-Nano (FunAudioLLM/Fun-ASR-Nano-2512-hf)
-
-| conc | wall(s) mean | thrpt/s mean | thrpt/s best | lat_mean(s) | lat_p95(s) | rtf_mean | rtf_p95 | corpus_wer | max_wer | skipped |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1  | 88.14 | 12.34 | — | 0.081 | 0.096 | 0.0175 | 0.0222 | 0.0171 | 0.2857 | 0 |
-| 2  | 63.14 | 17.23 | — | 0.116 | 0.139 | 0.0252 | 0.0324 | 0.0171 | 0.2857 | 0 |
-| 4  | 47.18 | 23.06 | — | 0.173 | 0.226 | 0.0375 | 0.0511 | 0.0171 | 0.2857 | 0 |
-| 8  | 36.94 | 29.46 | — | 0.271 | 0.359 | 0.0586 | 0.0800 | 0.0171 | 0.2857 | 0 |
-| 16 | 30.03 | 36.23 | — | 0.440 | 0.589 | 0.0953 | 0.1306 | 0.0171 | 0.2857 | 0 |
-| 32 | 26.76 | 40.66 | — | 0.784 | 1.060 | 0.1696 | 0.2306 | 0.0171 | 0.2857 | 0 |
-| 64 | 27.25 | 39.93 | — | 1.592 | 1.940 | 0.3471 | 0.4657 | 0.0171 | 0.2857 | 0 |
-
-Qwen3-ASR at conc=64 drops 54-72 of 1088 requests per repeat (~5-7%) to
-timeouts on a single GPU; WER is computed over the evaluated subset. All other
-levels: 0 skipped. This is a single-GPU saturation limit, not a regression
-from the refactor. CI runs at conc=32.
-
-Headline: Qwen3-ASR-1.7B is more accurate (corpus WER 0.0130-0.0137 vs
-Fun-ASR-Nano 0.0171, both stable across concurrency) and saturates higher
-(55.1/s vs 40.7/s at conc=32); Fun-ASR-Nano is ~2x faster at low concurrency
-(conc=1 mean latency 0.081s vs 0.165s, RTF 0.0175 vs 0.0359) with zero skipped
-requests across all levels.
+Aligned config for both models: dtype bf16, GPU RTX 4080 SUPER 32G, 3 repeats
++ warmup, concurrency 1/2/4/8/16/32/64, audio duration mean 4.69s / median
+4.53s / max 8.81s / total 85.1 min. Qwen3-ASR-1.7B and Fun-ASR-Nano each ran
+the full 1088-clip EN set end to end through this script.
 """
 
 from __future__ import annotations
@@ -111,180 +67,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import statistics
-from dataclasses import dataclass
-from pathlib import Path
 
 import requests
-from jiwer import process_words
 
-from benchmarks.benchmarker.data import RequestResult
-from benchmarks.benchmarker.runner import BenchmarkRunner, RunConfig
-from benchmarks.benchmarker.utils import managed_omni_server
 from benchmarks.dataset.prepare import DATASETS
-from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
-from benchmarks.metrics.performance import compute_speed_metrics
-from benchmarks.metrics.wer import calculate_asr_speed_metrics, calculate_wer_metrics
-from benchmarks.tasks.tts import (
-    DEFAULT_ASR_TRANSCRIBE_CONCURRENCY,
+from benchmarks.dataset.seedtts import load_seedtts_samples
+from benchmarks.tasks.asr import (
     QWEN3_ASR_MODEL_PATH,
-    QWEN3_ASR_REQUEST_TIMEOUT_S,
-    SampleOutput,
-    make_asr_send_fn,
-    normalize_text,
+    build_asr_eval_results,
+    run_asr_transcription,
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCIES = "1,2,4,8,16,32,64"
-
-
-@dataclass
-class AsrConcurrencyBenchmarkConfig:
-    """All parameters for one ASR concurrency-sweep run (mirrors
-    TtsSeedttsBenchmarkConfig in benchmark_tts_seedtts.py)."""
-
-    model_path: str
-    port: int
-    host: str = "127.0.0.1"
-    meta: str = DATASETS["seedtts"]
-    lang: str = "en"
-    max_samples: int | None = None
-    concurrencies: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64)
-    repeats: int = 3
-    max_new_tokens: int | None = None
-    warmup: bool = False
-    request_timeout_s: int = QWEN3_ASR_REQUEST_TIMEOUT_S
-    disable_tqdm: bool = True
-    output: str = "asr_concurrency_results.json"
-    use_existing_server: bool = False
-    server_timeout: int = 600
-    wait_for_gpu_release: bool = True
-
-
-async def run_asr_transcription(
-    samples: list[SampleInput],
-    *,
-    host: str = "127.0.0.1",
-    port: int,
-    model_path: str = QWEN3_ASR_MODEL_PATH,
-    lang: str = "en",
-    concurrency: int = DEFAULT_ASR_TRANSCRIBE_CONCURRENCY,
-    warmup: int = 0,
-    request_timeout_s: int = QWEN3_ASR_REQUEST_TIMEOUT_S,
-    max_new_tokens: int | None = None,
-    disable_tqdm: bool = True,
-) -> tuple[list[RequestResult], float]:
-    """Transcribe samples against a running ASR router at one concurrency.
-
-    Returns (outputs, wall_clock_s) via the shared BenchmarkRunner.
-    max_new_tokens=None lets make_asr_send_fn pick the backend default
-    (Qwen3-ASR 128, Fun-ASR-Nano 256).
-    """
-    api_url = f"http://{host}:{port}/v1/audio/transcriptions"
-    send_fn = make_asr_send_fn(
-        model_path, api_url, lang=lang, max_new_tokens=max_new_tokens
-    )
-    runner = BenchmarkRunner(
-        RunConfig(
-            max_concurrency=concurrency,
-            warmup=warmup,
-            disable_tqdm=disable_tqdm,
-            timeout_s=request_timeout_s,
-        )
-    )
-    outputs = await runner.run(samples, send_fn)
-    return outputs, runner.wall_clock_s
-
-
-def build_asr_eval_results(
-    samples: list[SampleInput],
-    outputs: list[RequestResult],
-    wall_clock_s: float,
-    lang: str,
-    *,
-    model_path: str = QWEN3_ASR_MODEL_PATH,
-    concurrency: int = DEFAULT_ASR_TRANSCRIBE_CONCURRENCY,
-) -> dict:
-    """Score transcriptions and assemble WER + speed metrics.
-
-    Returns {"summary": wer, "speed": speed, "per_sample": [...]} with the
-    exact summary.* / speed.* keys the Qwen3-ASR gate writes and the
-    tune-ci-thresholds config reads. WER/speed reuse benchmarks.metrics.
-    """
-    result_by_id = {result.request_id: result for result in outputs}
-    sample_outputs: list[SampleOutput] = []
-    per_sample: list[dict] = []
-    for sample in samples:
-        result = result_by_id.get(sample.sample_id)
-        output = SampleOutput(
-            sample_id=sample.sample_id,
-            target_text=sample.ref_text,
-        )
-        if result is None or not result.is_success:
-            output.error = (result.error if result else "") or "No transcription"
-        else:
-            output.latency_s = result.latency_s
-            output.asr_latency_s = result.latency_s
-            output.audio_duration_s = result.audio_duration_s
-            output.whisper_text = result.text
-            output.ref_norm = normalize_text(sample.ref_text, lang)
-            output.hyp_norm = normalize_text(result.text, lang)
-            if output.ref_norm:
-                measures = process_words(output.ref_norm, output.hyp_norm)
-                output.wer = measures.wer
-                output.substitutions = measures.substitutions
-                output.deletions = measures.deletions
-                output.insertions = measures.insertions
-                output.hits = measures.hits
-                output.is_success = True
-            else:
-                output.error = "Empty reference after normalization"
-        sample_outputs.append(output)
-        per_sample.append(
-            {
-                "id": output.sample_id,
-                "is_success": output.is_success,
-                "wer": output.wer if output.is_success else None,
-                "ref_text": output.target_text,
-                "hyp_text": output.whisper_text,
-                "ref_norm": output.ref_norm,
-                "hyp_norm": output.hyp_norm,
-                "audio_duration_s": output.audio_duration_s,
-                "latency_s": output.latency_s,
-                "error": output.error,
-            }
-        )
-
-    wer_summary = calculate_wer_metrics(sample_outputs, lang)
-    # note (Yue Yin): gate + tune-ci-thresholds read summary.corpus_wer
-    wer_summary["corpus_wer"] = wer_summary["wer_corpus"]
-
-    asr_speed = calculate_asr_speed_metrics(sample_outputs, wall_time_s=wall_clock_s)
-    # note (Yue Yin): compute_speed_metrics supplies rtf_p95 (the asr metrics omit it)
-    perf = compute_speed_metrics(outputs, wall_clock_s=wall_clock_s)
-    speed = {
-        **asr_speed,
-        "asr_model": model_path,
-        "asr_concurrency": concurrency,
-        "asr_rtf_p95": perf.get("rtf_p95"),
-        # note (Yue Yin): plain calibration keys read by tune-ci-thresholds + gate
-        "throughput_samples_per_s": asr_speed["asr_throughput_samples_per_s"],
-        "latency_mean_s": asr_speed["asr_latency_mean_s"],
-        "latency_median_s": asr_speed["asr_latency_median_s"],
-        "latency_p95_s": asr_speed["asr_latency_p95_s"],
-        "latency_p99_s": asr_speed["asr_latency_p99_s"],
-        "rtf_mean": asr_speed["asr_rtf_mean"],
-        "rtf_median": asr_speed["asr_rtf_median"],
-        "rtf_p95": perf.get("rtf_p95"),
-    }
-    return {"summary": wer_summary, "speed": speed, "per_sample": per_sample}
 
 
 def _fetch_worker_snapshot(host: str, port: int) -> dict | None:
@@ -326,30 +122,24 @@ def _worker_delta(before: dict | None, after: dict | None) -> dict:
     return out
 
 
-async def _run_repeat(
-    config: AsrConcurrencyBenchmarkConfig,
-    samples: list[SampleInput],
-    concurrency: int,
-    repeat: int,
-) -> dict:
-    before = _fetch_worker_snapshot(config.host, config.port)
+async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
+    before = _fetch_worker_snapshot(args.host, args.port)
     outputs, wall_clock_s = await run_asr_transcription(
         samples,
-        host=config.host,
-        port=config.port,
-        model_path=config.model_path,
-        lang=config.lang,
+        host=args.host,
+        port=args.port,
+        model_path=args.model_path,
+        lang=args.lang,
         concurrency=concurrency,
-        max_new_tokens=config.max_new_tokens,
     )
-    after = _fetch_worker_snapshot(config.host, config.port)
+    after = _fetch_worker_snapshot(args.host, args.port)
 
     results = build_asr_eval_results(
         samples,
         outputs,
         wall_clock_s,
-        config.lang,
-        model_path=config.model_path,
+        args.lang,
+        model_path=args.model_path,
         concurrency=concurrency,
     )
     summary = results["summary"]
@@ -426,131 +216,7 @@ def _print_table(aggregates: list[dict]) -> None:
         )
 
 
-async def _sweep(
-    config: AsrConcurrencyBenchmarkConfig,
-    samples: list[SampleInput],
-) -> list[dict]:
-    aggregates: list[dict] = []
-    for concurrency in config.concurrencies:
-        if config.warmup:
-            print(f"[conc={concurrency}] warmup pass ...")
-            await run_asr_transcription(
-                samples,
-                host=config.host,
-                port=config.port,
-                model_path=config.model_path,
-                lang=config.lang,
-                concurrency=concurrency,
-                max_new_tokens=config.max_new_tokens,
-            )
-        repeats: list[dict] = []
-        for repeat in range(1, config.repeats + 1):
-            result = await _run_repeat(config, samples, concurrency, repeat)
-            repeats.append(result)
-            print(
-                f"[conc={concurrency} rep={repeat}] "
-                f"wall={result['wall_clock_s']:.3f}s "
-                f"thrpt={result['throughput_samples_per_s']:.3f}/s "
-                f"lat_mean={result['latency_mean_s']:.3f}s "
-                f"lat_p95={result['latency_p95_s']:.3f}s "
-                f"rtf_mean={result['rtf_mean']:.4f} "
-                f"corpus_wer={result['corpus_wer']:.4f} "
-                f"skipped={result['skipped']}"
-            )
-            if result["worker"].get("per_worker_routed"):
-                print(f"    routed per worker: {result['worker']['per_worker_routed']}")
-        aggregates.append(_aggregate(repeats))
-    return aggregates
-
-
-def _build_results_config(
-    config: AsrConcurrencyBenchmarkConfig,
-    *,
-    num_samples: int,
-) -> dict:
-    return {
-        "model_path": config.model_path,
-        "host": config.host,
-        "port": config.port,
-        "meta": config.meta,
-        "lang": config.lang,
-        "max_new_tokens": config.max_new_tokens,
-        "num_samples": num_samples,
-        "concurrencies": list(config.concurrencies),
-        "repeats": config.repeats,
-        "warmup": config.warmup,
-        "use_existing_server": config.use_existing_server,
-    }
-
-
-def benchmark(config: AsrConcurrencyBenchmarkConfig) -> dict:
-    """Run the full concurrency sweep and write results JSON.
-
-    Starts/stops the ASR server unless config.use_existing_server is set
-    (mirrors benchmark_tts_seedtts.py's managed_omni_server pattern).
-    Returns the persisted payload dict.
-    """
-    samples = load_seedtts_samples(
-        config.meta, max_samples=config.max_samples, split=config.lang
-    )
-    print(
-        f"Loaded {len(samples)} SeedTTS {config.lang} samples; "
-        f"sweeping concurrency={list(config.concurrencies)} x {config.repeats} repeats "
-        f"against {config.host}:{config.port} ({config.model_path})"
-    )
-
-    def _run_sweep() -> list[dict]:
-        return asyncio.run(_sweep(config, samples))
-
-    if config.use_existing_server:
-        aggregates = _run_sweep()
-    else:
-        with managed_omni_server(
-            model_path=config.model_path,
-            port=config.port,
-            host=config.host,
-            log_file=Path(config.output).resolve().parent / "server_logs" / "asr_server.log",
-            timeout=config.server_timeout,
-            wait_for_gpu_release=config.wait_for_gpu_release,
-        ):
-            aggregates = _run_sweep()
-
-    _print_table(aggregates)
-
-    payload = {
-        "config": _build_results_config(config, num_samples=len(samples)),
-        "results": aggregates,
-    }
-    output_path = os.path.abspath(config.output)
-    with open(output_path, "w") as handle:
-        json.dump(payload, handle, indent=2)
-    print(f"\nWrote results to {output_path}")
-    return payload
-
-
-def _config_from_args(args: argparse.Namespace) -> AsrConcurrencyBenchmarkConfig:
-    max_new_tokens = args.max_new_tokens if args.max_new_tokens > 0 else None
-    max_samples = args.max_samples if args.max_samples > 0 else None
-    concurrencies = tuple(int(c) for c in args.concurrencies.split(",") if c.strip())
-    return AsrConcurrencyBenchmarkConfig(
-        model_path=args.model_path,
-        port=args.port,
-        host=args.host,
-        meta=args.meta,
-        lang=args.lang,
-        max_samples=max_samples,
-        concurrencies=concurrencies,
-        repeats=args.repeats,
-        max_new_tokens=max_new_tokens,
-        warmup=args.warmup,
-        output=args.output,
-        use_existing_server=args.use_existing_server,
-        server_timeout=args.server_timeout,
-        wait_for_gpu_release=not args.skip_gpu_cleanup,
-    )
-
-
-def _build_arg_parser() -> argparse.ArgumentParser:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument(
@@ -579,17 +245,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
         "--model-path",
-        type=str,
         default=QWEN3_ASR_MODEL_PATH,
-        help="HuggingFace model id for the ASR server. Defaults to "
-        f"{QWEN3_ASR_MODEL_PATH} (Qwen3-ASR); pass FunAudioLLM/Fun-ASR-Nano-2512-hf "
-        "for Fun-ASR-Nano. The backend is resolved from this path.",
-    )
-    parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=0,
-        help="Override max_new_tokens (0 = backend default: Qwen3-ASR 128, Fun-ASR-Nano 256).",
+        help=(
+            "ASR model id served by the router. Defaults to "
+            f"{QWEN3_ASR_MODEL_PATH} (Qwen3-ASR); pass "
+            "FunAudioLLM/Fun-ASR-Nano-2512-hf for Fun-ASR-Nano."
+        ),
     )
     parser.add_argument(
         "--warmup",
@@ -601,33 +262,75 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="asr_concurrency_results.json",
         help="Where to write the full JSON results.",
     )
-    parser.add_argument(
-        "--use-existing-server",
-        action="store_true",
-        help="Do not start or stop a server; send requests to the configured "
-        "--host/--port instead. Use when a server is already running.",
-    )
-    parser.add_argument(
-        "--server-timeout",
-        type=int,
-        default=600,
-        help="Timeout in seconds to wait for server readiness.",
-    )
-    parser.add_argument(
-        "--skip-gpu-cleanup",
-        action="store_true",
-        help="Do not run ensure_gpus_idle after stopping the server. Use when "
-        "running multiple benchmark processes in parallel on different GPUs; "
-        "combine with CUDA_VISIBLE_DEVICES per worker and clean up each GPU "
-        "once after the worker finishes.",
-    )
-    return parser
+    return parser.parse_args()
+
+
+async def _sweep(args, samples, concurrencies: list[int]) -> list[dict]:
+    aggregates: list[dict] = []
+    for concurrency in concurrencies:
+        if args.warmup:
+            print(f"[conc={concurrency}] warmup pass ...")
+            await run_asr_transcription(
+                samples,
+                host=args.host,
+                port=args.port,
+                model_path=args.model_path,
+                lang=args.lang,
+                concurrency=concurrency,
+            )
+        repeats: list[dict] = []
+        for repeat in range(1, args.repeats + 1):
+            result = await _run_repeat(args, samples, concurrency, repeat)
+            repeats.append(result)
+            print(
+                f"[conc={concurrency} rep={repeat}] "
+                f"wall={result['wall_clock_s']:.3f}s "
+                f"thrpt={result['throughput_samples_per_s']:.3f}/s "
+                f"lat_mean={result['latency_mean_s']:.3f}s "
+                f"lat_p95={result['latency_p95_s']:.3f}s "
+                f"rtf_mean={result['rtf_mean']:.4f} "
+                f"corpus_wer={result['corpus_wer']:.4f} "
+                f"skipped={result['skipped']}"
+            )
+            if result["worker"].get("per_worker_routed"):
+                print(f"    routed per worker: {result['worker']['per_worker_routed']}")
+        aggregates.append(_aggregate(repeats))
+    return aggregates
 
 
 def main() -> None:
-    args = _build_arg_parser().parse_args()
-    config = _config_from_args(args)
-    benchmark(config)
+    args = parse_args()
+    concurrencies = [int(c) for c in args.concurrencies.split(",") if c.strip()]
+    max_samples = args.max_samples if args.max_samples > 0 else None
+
+    samples = load_seedtts_samples(args.meta, max_samples=max_samples, split=args.lang)
+    print(
+        f"Loaded {len(samples)} SeedTTS {args.lang} samples; "
+        f"sweeping concurrency={concurrencies} x {args.repeats} repeats "
+        f"against {args.host}:{args.port} ({args.model_path})"
+    )
+
+    aggregates = asyncio.run(_sweep(args, samples, concurrencies))
+    _print_table(aggregates)
+
+    payload = {
+        "config": {
+            "host": args.host,
+            "port": args.port,
+            "meta": args.meta,
+            "lang": args.lang,
+            "model_path": args.model_path,
+            "num_samples": len(samples),
+            "concurrencies": concurrencies,
+            "repeats": args.repeats,
+            "warmup": args.warmup,
+        },
+        "results": aggregates,
+    }
+    output_path = os.path.abspath(args.output)
+    with open(output_path, "w") as handle:
+        json.dump(payload, handle, indent=2)
+    print(f"\nWrote results to {output_path}")
 
 
 if __name__ == "__main__":

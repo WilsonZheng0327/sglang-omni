@@ -4,10 +4,9 @@
 The test uses the full English SeedTTS set as the speech corpus. It compares
 normalized transcriptions from the SGLang Omni Qwen3-ASR router against the
 dataset reference text. Transcription, WER, and speed metrics are computed by
-the shared benchmark path imported from
-``benchmarks.eval.benchmark_asr_concurrency`` (``run_asr_transcription`` /
-``build_asr_eval_results``); this gate only launches the router, runs one pass,
-and applies thresholds.
+the shared ASR task layer imported from ``benchmarks.tasks.asr``
+(``run_asr_transcription`` / ``build_asr_eval_results``); this gate only
+launches the router, runs one pass, and applies thresholds.
 """
 
 from __future__ import annotations
@@ -19,12 +18,12 @@ import pytest
 
 from benchmarks.dataset.prepare import DATASETS
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
-from benchmarks.eval.benchmark_asr_concurrency import (
+from benchmarks.metrics.wer import print_asr_speed_summary, print_asr_wer_summary
+from benchmarks.tasks.asr import (
+    QWEN3_ASR_MODEL_PATH,
     build_asr_eval_results,
     run_asr_transcription,
 )
-from benchmarks.metrics.wer import print_asr_speed_summary, print_asr_wer_summary
-from benchmarks.tasks.tts import QWEN3_ASR_MODEL_PATH
 from tests.test_model.omni_router_utils import (
     ManagedRouterHandle,
     launch_managed_router,

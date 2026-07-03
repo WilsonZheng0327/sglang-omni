@@ -67,9 +67,7 @@ print(resp.json()["text"])
 
 SeedTTS EN concurrency/WER benchmarking for Fun-ASR-Nano lives in
 `benchmarks/eval/benchmark_asr_concurrency.py`. Pass the Fun-ASR-Nano model
-path with `--model-path`; the per-model HTTP knobs
-(`max_new_tokens=256`, `temperature=0.0`) are resolved automatically by
-`benchmarks.tasks.tts.make_asr_send_fn`.
+path with `--model-path`.
 
 ```bash
 # Download the test set once:
