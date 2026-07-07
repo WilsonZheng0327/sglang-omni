@@ -27,8 +27,11 @@ from sglang.srt.utils import add_prefix
 from sglang_omni.models.moss_transcribe_diarize.hf_config import (
     MossTranscribeDiarizeConfig,
 )
+from sglang_omni.scheduling.stage_cache import StageOutputCache
 
 logger = logging.getLogger(__name__)
+
+_ENCODER_CACHE_MAX_ENTRIES = 64
 
 
 class VQAdaptor(nn.Module):
@@ -83,6 +86,18 @@ class MossTranscribeDiarizeForConditionalGeneration(nn.Module):
             prefix=add_prefix("model.language_model", prefix),
         )
         self.pattern = MultiModalityDataPaddingPatternMultimodalTokens()
+        self._encoder_cache: Optional[StageOutputCache] = None
+
+    def init_encoder_cache(self, max_bytes: int) -> None:
+        self._encoder_cache = (
+            StageOutputCache(
+                max_size=_ENCODER_CACHE_MAX_ENTRIES,
+                max_bytes=max_bytes,
+                cache_device="cpu",
+            )
+            if max_bytes and max_bytes > 0
+            else None
+        )
 
     def get_input_embeddings(self):
         return self.language_model.get_input_embeddings()
@@ -99,6 +114,23 @@ class MossTranscribeDiarizeForConditionalGeneration(nn.Module):
         )
 
     def get_audio_feature(
+        self,
+        items: List[MultimodalDataItem],
+        forward_batch: ForwardBatch,
+    ) -> torch.Tensor:
+        cache = self._encoder_cache
+        key = getattr(items[0], "hash", None) if len(items) == 1 else None
+        if cache is not None and key is not None:
+            cached = cache.get(str(key))
+            if cached is not None:
+                device = next(self.vq_adaptor.parameters()).device
+                return cached.to(device, non_blocking=True)
+            output = self._get_audio_feature_uncached(items, forward_batch)
+            cache.put(str(key), output)
+            return output
+        return self._get_audio_feature_uncached(items, forward_batch)
+
+    def _get_audio_feature_uncached(
         self,
         items: List[MultimodalDataItem],
         forward_batch: ForwardBatch,
