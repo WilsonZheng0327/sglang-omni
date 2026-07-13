@@ -8,8 +8,8 @@ from typing import Any
 
 import torch
 
-_LFR_M = 7  
-_LFR_N = 6  
+_LFR_M = 7
+_LFR_N = 6
 _LOW_FRAME_RATE_STAGES = 3
 
 

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 _SAMPLE_RATE = 16000
 _AUDIO_PAD = "<|object_ref_start|>"
 
+
 @dataclass
 class FunASRRequestData(SGLangARRequestData):
     prompt_token_ids: list[int] | None = None
@@ -139,7 +140,8 @@ def make_fun_asr_scheduler_adapters(
     max_new_tokens: int,
     feature_extractor: Any = None,
 ) -> tuple[
-    Callable[[StagePayload], FunASRRequestData], Callable[[FunASRRequestData], StagePayload]
+    Callable[[StagePayload], FunASRRequestData],
+    Callable[[FunASRRequestData], StagePayload],
 ]:
     if feature_extractor is None:
         raise ValueError("Fun-ASR processor is missing a feature_extractor")

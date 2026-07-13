@@ -1,65 +1,59 @@
 # SPDX-License-Identifier: Apache-2.0
 # Author:
+# chenyang zhao: https://github.com/zhaochenyang20
 # PoTaTo-Mika: https://github.com/PoTaTo-Mika
-"""ASR concurrency-scaling benchmark on SeedTTS EN (issue #646).
+"""ASR concurrency benchmark on SeedTTS reference audio (issue #646).
 
-Sweeps ASR transcription fan-out (concurrency) against a running ASR
-SGLang Omni router and reports, for each concurrency level, the metrics tracked
-in issue #646: corpus/per-sample WER, wall-clock, throughput, latency
-percentiles, RTF, and per-worker routing balance. This produces the repeatable
-concurrency-scaling data the issue's acceptance criteria ask for, and lets us
-decide the right ASR fan-out for SeedTTS EN transcription / WER workloads.
-
-This script transcribes the SeedTTS reference clips directly (no TTS
-generation step), so it isolates ASR behavior from TTS.
+This script transcribes SeedTTS reference clips directly through a running ASR
+router and reports WER, throughput, latency, RTF, and worker routing balance.
+It supports both Qwen3-ASR and Fun-ASR-Nano through ``--model-path``.
 
 Usage:
 
     # Download the test set once:
     python -m benchmarks.dataset.prepare --dataset seedtts
 
-    # Launch Qwen3-ASR (DP=2 to match TTS CI):
-    python -m sglang_omni.cli serve \
-        --model-path Qwen/Qwen3-ASR-1.7B \
-        --dp-size 2 \
-        --port 8000
+    # Launch Qwen3-ASR behind the router, matching ASR CI
+    python -m sglang_omni_router.serve \
+        --host 0.0.0.0 \
+        --port 8000 \
+        --launcher-config examples/configs/qwen3_asr_router.yaml \
+        --policy least_request \
+        --health-success-threshold 1 \
+        --health-failure-threshold 2 \
+        --health-check-interval-secs 2 \
+        --log-level info
 
     # Sweep the issue's matrix (3 repeats each) over the full SeedTTS EN set:
-    python -m benchmarks.eval.benchmark_asr_concurrency \
+    python -m benchmarks.eval.benchmark_asr_seedtts \
         --port 8000 \
         --concurrencies 1,2,4,8,16,32,64 \
         --repeats 3
 
     # Quick local smoke on a 20-sample subset:
-    python -m benchmarks.eval.benchmark_asr_concurrency \
+    python -m benchmarks.eval.benchmark_asr_seedtts \
         --port 8000 --max-samples 20 --concurrencies 2,32 --repeats 3
 
-    # Fun-ASR-Nano on the same set:
+    # Run the same sweep against Fun-ASR-Nano:
     python -m sglang_omni.cli serve \
         --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000
-    python -m benchmarks.eval.benchmark_asr_concurrency \
+    python -m benchmarks.eval.benchmark_asr_seedtts \
         --port 8000 --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf \
-        --concurrencies 1,2,4,8,16,32,64 --repeats 3
+        --concurrencies 1,2,4,8,16,32,64 --repeats 3 --warmup
 
-Reference Results (SeedTTS EN Full set, 1088 clips, bf16, RTX 4080 SUPER 32G,
-3 repeats + warmup per concurrency, concurrency swept 1/2/4/8/16/32/64):
+Reference results on the full SeedTTS EN set (1088 clips, bf16, single RTX
+4080 SUPER 32 GB, DP=1, three repeats plus one discarded warmup per level):
 
-  Qwen3-ASR-1.7B (max_new_tokens from pipeline config; no temperature sent):
-    conc=32 -> wall 19.7s, thrpt 55.1/s, lat_mean 0.579s, rtf_mean 0.0359,
-    corpus_wer 0.0130 (below the 0.0139 CI gate). conc=64 shows 72 skipped
-    requests (single-GPU saturation under DP=1, not a model defect).
+* At concurrency 32, Qwen3-ASR-1.7B reached 55.07 samples/s with 0.577 s mean
+  latency, 0.1247 mean RTF, and 0.0130 corpus WER.
+* At concurrency 32, Fun-ASR-Nano reached 40.66 samples/s with 0.784 s mean
+  latency, 0.1696 mean RTF, and 0.0171 corpus WER.
+* At concurrency 1, Fun-ASR-Nano had roughly half the mean latency and RTF of
+  Qwen3-ASR (0.081 s vs. 0.165 s; 0.0175 vs. 0.0359).
 
-  Fun-ASR-Nano (greedy temperature=0.0, max_new_tokens=256, both from the
-  FunASRPipelineConfig defaults; the HTTP request omits both):
-    conc=32 -> wall 26.7s, thrpt 40.7/s, lat_mean 0.081s (conc=1), rtf_mean
-    0.0175, corpus_wer 0.0171 (stable across all concurrency levels, 0
-    skipped). Lower throughput than Qwen3-ASR but roughly 2x lower conc=1
-    latency and RTF.
-
-Aligned config for both models: dtype bf16, GPU RTX 4080 SUPER 32G, 3 repeats
-+ warmup, concurrency 1/2/4/8/16/32/64, audio duration mean 4.69s / median
-4.53s / max 8.81s / total 85.1 min. Qwen3-ASR-1.7B and Fun-ASR-Nano each ran
-the full 1088-clip EN set end to end through this script.
+Both models saturated near concurrency 32. Fun-ASR completed every request at
+all measured levels; Qwen3-ASR skipped 72 requests at concurrency 64 on the
+single GPU. Audio duration was 4.69 s mean, 4.53 s median, and 8.81 s maximum.
 """
 
 from __future__ import annotations
@@ -73,7 +67,7 @@ import statistics
 import requests
 
 from benchmarks.dataset.prepare import DATASETS
-from benchmarks.dataset.seedtts import load_seedtts_samples
+from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
 from benchmarks.tasks.asr import (
     QWEN3_ASR_MODEL_PATH,
     build_asr_eval_results,
@@ -122,9 +116,45 @@ def _worker_delta(before: dict | None, after: dict | None) -> dict:
     return out
 
 
-async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
-    before = _fetch_worker_snapshot(args.host, args.port)
+async def run_asr_seedtts_once(
+    samples: list[SampleInput],
+    host: str,
+    port: int,
+    concurrency: int,
+    model_path: str = QWEN3_ASR_MODEL_PATH,
+    lang: str = "en",
+    warmup: int = 0,
+    disable_tqdm: bool = True,
+) -> dict:
+    """Run one SeedTTS ASR benchmark pass and return WER/speed/worker metrics."""
+    before = _fetch_worker_snapshot(host, port)
     outputs, wall_clock_s = await run_asr_transcription(
+        samples,
+        host=host,
+        port=port,
+        model_path=model_path,
+        lang=lang,
+        concurrency=concurrency,
+        warmup=warmup,
+        disable_tqdm=disable_tqdm,
+    )
+    after = _fetch_worker_snapshot(host, port)
+
+    benchmark_result = build_asr_eval_results(
+        samples,
+        outputs,
+        wall_clock_s,
+        lang,
+        model_path=model_path,
+        concurrency=concurrency,
+    )
+    benchmark_result["wall_clock_s"] = wall_clock_s
+    benchmark_result["worker"] = _worker_delta(before, after)
+    return benchmark_result
+
+
+async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
+    benchmark_result = await run_asr_seedtts_once(
         samples,
         host=args.host,
         port=args.port,
@@ -132,18 +162,8 @@ async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
         lang=args.lang,
         concurrency=concurrency,
     )
-    after = _fetch_worker_snapshot(args.host, args.port)
-
-    results = build_asr_eval_results(
-        samples,
-        outputs,
-        wall_clock_s,
-        args.lang,
-        model_path=args.model_path,
-        concurrency=concurrency,
-    )
-    summary = results["summary"]
-    speed = results["speed"]
+    summary = benchmark_result["summary"]
+    speed = benchmark_result["speed"]
     return {
         "concurrency": concurrency,
         "repeat": repeat,
@@ -152,14 +172,14 @@ async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
         "skipped": summary["skipped"],
         "corpus_wer": summary["corpus_wer"],
         "per_sample_wer_max": summary["wer_per_sample_max"],
-        "wall_clock_s": wall_clock_s,
+        "wall_clock_s": benchmark_result["wall_clock_s"],
         "throughput_samples_per_s": speed["throughput_samples_per_s"],
         "latency_mean_s": speed["latency_mean_s"],
         "latency_p95_s": speed["latency_p95_s"],
         "latency_p99_s": speed["latency_p99_s"],
         "rtf_mean": speed["rtf_mean"],
         "rtf_p95": speed["rtf_p95"],
-        "worker": _worker_delta(before, after),
+        "worker": benchmark_result["worker"],
     }
 
 
@@ -248,7 +268,7 @@ def parse_args() -> argparse.Namespace:
         default=QWEN3_ASR_MODEL_PATH,
         help=(
             "ASR model id served by the router. Defaults to "
-            f"{QWEN3_ASR_MODEL_PATH} (Qwen3-ASR); pass "
+            f"{QWEN3_ASR_MODEL_PATH}; use "
             "FunAudioLLM/Fun-ASR-Nano-2512-hf for Fun-ASR-Nano."
         ),
     )
@@ -259,7 +279,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default="asr_concurrency_results.json",
+        default="asr_seedtts_results.json",
         help="Where to write the full JSON results.",
     )
     return parser.parse_args()

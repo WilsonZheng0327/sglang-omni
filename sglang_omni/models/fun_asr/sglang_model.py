@@ -10,7 +10,6 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.managers.mm_utils import (
     MultiModalityDataPaddingPatternMultimodalTokens,
@@ -103,7 +102,7 @@ class MultiHeadedAttentionSANM(nn.Module):
         v_h = v.view(b, t, self.h, self.d_k).transpose(1, 2)
 
         fsmn_memory = self.forward_fsmn(v)
-        q_h = q_h * (self.d_k ** -0.5)
+        q_h = q_h * (self.d_k**-0.5)
         scores = torch.matmul(q_h, k_h.transpose(-2, -1))  # (b, h, t, t)
         attn = torch.softmax(scores, dim=-1)
         p_attn = self.dropout(attn)
@@ -200,7 +199,11 @@ class FunAsrNanoAudioEncoder(nn.Module):
         self.encoders0 = nn.ModuleList(
             [
                 EncoderLayerSANM(
-                    input_size, output_size, make_attn(input_size), make_ffn(), dropout_rate
+                    input_size,
+                    output_size,
+                    make_attn(input_size),
+                    make_ffn(),
+                    dropout_rate,
                 )
                 for _ in range(1)
             ]
@@ -209,7 +212,11 @@ class FunAsrNanoAudioEncoder(nn.Module):
         self.encoders = nn.ModuleList(
             [
                 EncoderLayerSANM(
-                    output_size, output_size, make_attn(output_size), make_ffn(), dropout_rate
+                    output_size,
+                    output_size,
+                    make_attn(output_size),
+                    make_ffn(),
+                    dropout_rate,
                 )
                 for _ in range(num_blocks - 1)
             ]
@@ -217,7 +224,11 @@ class FunAsrNanoAudioEncoder(nn.Module):
         self.tp_encoders = nn.ModuleList(
             [
                 EncoderLayerSANM(
-                    output_size, output_size, make_attn(output_size), make_ffn(), dropout_rate
+                    output_size,
+                    output_size,
+                    make_attn(output_size),
+                    make_ffn(),
+                    dropout_rate,
                 )
                 for _ in range(tp_blocks)
             ]
@@ -230,7 +241,7 @@ class FunAsrNanoAudioEncoder(nn.Module):
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         # xs: [B, T, input_size]. Scale by sqrt(output_size) then add sinusoidal PE.
-        xs = xs * (self._output_size ** 0.5)
+        xs = xs * (self._output_size**0.5)
         xs = self.embed(xs)
         for layer in self.encoders0:
             xs = layer(xs)
@@ -271,7 +282,7 @@ class MultiHeadedAttention(nn.Module):
         q_h = self.linear_q(x).view(b, t, self.h, self.d_k).transpose(1, 2)
         k_h = self.linear_k(x).view(b, t, self.h, self.d_k).transpose(1, 2)
         v_h = self.linear_v(x).view(b, t, self.h, self.d_k).transpose(1, 2)
-        q_h = q_h * (self.d_k ** -0.5)
+        q_h = q_h * (self.d_k**-0.5)
         scores = torch.matmul(q_h, k_h.transpose(-2, -1))
         attn = torch.softmax(scores, dim=-1)
         p_attn = self.dropout(attn)
@@ -349,6 +360,7 @@ class FunAsrNanoAdaptor(nn.Module):
 
 
 # Final Model
+
 
 class FunAsrNanoForConditionalGeneration(nn.Module):
 

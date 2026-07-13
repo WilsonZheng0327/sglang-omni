@@ -66,7 +66,7 @@ print(resp.json()["text"])
 ## Benchmarking
 
 SeedTTS EN concurrency/WER benchmarking for Fun-ASR-Nano lives in
-`benchmarks/eval/benchmark_asr_concurrency.py`. Pass the Fun-ASR-Nano model
+`benchmarks/eval/benchmark_asr_seedtts.py`. Pass the Fun-ASR-Nano model
 path with `--model-path`.
 
 ```bash
@@ -77,12 +77,12 @@ python -m benchmarks.dataset.prepare --dataset seedtts
 sgl-omni serve --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000
 
 # Sweep the full SeedTTS EN set (1088 clips) at 1..64 concurrency, 3 repeats:
-python -m benchmarks.eval.benchmark_asr_concurrency \
+python -m benchmarks.eval.benchmark_asr_seedtts \
   --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000 \
   --concurrencies 1,2,4,8,16,32,64 --repeats 3
 
 # Quick smoke on a 20-sample subset:
-python -m benchmarks.eval.benchmark_asr_concurrency \
+python -m benchmarks.eval.benchmark_asr_seedtts \
   --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000 \
   --max-samples 20 --concurrencies 2 --repeats 1
 ```

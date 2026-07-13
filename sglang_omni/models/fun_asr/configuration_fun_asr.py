@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, ClassVar
 
 import numpy as np
@@ -23,7 +22,6 @@ from transformers.audio_utils import mel_filter_bank, window_function
 from transformers.feature_extraction_sequence_utils import SequenceFeatureExtractor
 
 from .tool_funcs.audio_lengths import fun_asr_low_frame_rate_length
-
 
 AUDIO_PLACEHOLDER_TOKEN = "<|object_ref_start|>"
 
@@ -88,9 +86,9 @@ class FunAsrNanoFeatureExtractor(SequenceFeatureExtractor):
         ).astype(np.float32)
 
         if window == "hamming":
-            self._window = window_function(self.win_length, name="hamming", periodic=False).astype(
-                np.float32
-            )
+            self._window = window_function(
+                self.win_length, name="hamming", periodic=False
+            ).astype(np.float32)
         else:
             raise ValueError(f"Unsupported window: {window!r} (Fun-ASR uses hamming)")
 
@@ -118,9 +116,7 @@ class FunAsrNanoFeatureExtractor(SequenceFeatureExtractor):
         # encoder/adaptor produce embeddings the LLM cannot decode (→ /sil).
         wav_t = torch.from_numpy(wav).unsqueeze(0) * (1 << 15)
         # Cap frame_length for very short audio (funasr WavFrontend does this).
-        frame_length = min(
-            self.frame_length, wav.shape[0] / self.sampling_rate * 1000
-        )
+        frame_length = min(self.frame_length, wav.shape[0] / self.sampling_rate * 1000)
         mat = kaldi.fbank(
             wav_t,
             num_mel_bins=self.n_mels,
@@ -218,7 +214,9 @@ class FunAsrNanoFeatureExtractor(SequenceFeatureExtractor):
             attention[i, :t] = masks[i]
 
         return_attention_mask = (
-            self.return_attention_mask if return_attention_mask is None else return_attention_mask
+            self.return_attention_mask
+            if return_attention_mask is None
+            else return_attention_mask
         )
         out = {"input_features": batched}
         if return_attention_mask:
@@ -300,9 +298,7 @@ class FunAsrNanoProcessor:
                     AUDIO_PLACEHOLDER_TOKEN
                 )
                 feat_lengths = inputs["feature_attention_mask"].sum(dim=-1)
-                audio_token_counts = self._get_feat_extract_output_lengths(
-                    feat_lengths
-                )
+                audio_token_counts = self._get_feat_extract_output_lengths(feat_lengths)
                 expanded = []
                 for seq_idx in range(input_ids.shape[0]):
                     ids = (
@@ -313,9 +309,7 @@ class FunAsrNanoProcessor:
                     audio_idx = 0
                     new_ids = []
                     for tid in ids:
-                        if tid == audio_pad_id and audio_idx < len(
-                            audio_token_counts
-                        ):
+                        if tid == audio_pad_id and audio_idx < len(audio_token_counts):
                             n = int(audio_token_counts[audio_idx].item())
                             new_ids.extend([audio_pad_id] * n)
                             audio_idx += 1
