@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
+import io
+import wave
+
 import numpy as np
 import pytest
 import torch
 
 import sglang_omni.models.moss_transcribe_diarize.request_builders as request_builders
 from sglang_omni.models.moss_transcribe_diarize.request_builders import (
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TOP_K,
+    DEFAULT_TOP_P,
     DEFAULT_TRANSCRIBE_DIARIZE_PROMPT,
     make_moss_transcribe_diarize_scheduler_adapters,
 )
-from sglang_omni.proto import OmniRequest, StagePayload
+from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, OmniRequest, StagePayload
+
+
+def _wav_bytes(num_samples: int = 1600, sample_rate: int = 16000) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\x00\x00" * num_samples)
+    return buffer.getvalue()
 
 
 class FakeTokenizer:
@@ -60,14 +76,20 @@ class FakeProcessor:
         }
 
 
-def _payload(prompt: str | None = None) -> StagePayload:
-    params = {"prompt": prompt} if prompt is not None else {}
+def _payload(
+    prompt: str | None = None,
+    params: dict | None = None,
+    metadata: dict | None = None,
+) -> StagePayload:
+    request_params = dict(params or {})
+    if prompt is not None:
+        request_params["prompt"] = prompt
     return StagePayload(
         request_id="req-1",
         request=OmniRequest(
-            inputs={"audio_data": np.zeros(1600, dtype=np.float32)},
-            params=params,
-            metadata={"model": "moss-transcribe-diarize"},
+            inputs={"audio_bytes": _wav_bytes()},
+            params=request_params,
+            metadata=metadata or {"model": "moss-transcribe-diarize"},
         ),
         data={},
     )
@@ -113,6 +135,100 @@ def test_request_builder_replaces_audio_tokens_with_item_pad_value() -> None:
     assert data.req.sampling_params.max_new_tokens == 32
 
 
+def test_request_builder_uses_moss_sampling_defaults() -> None:
+    request_builder = _request_builder()
+
+    data = request_builder(_payload())
+    sampling_params = data.req.sampling_params
+
+    assert data.temperature == DEFAULT_TEMPERATURE
+    assert data.top_p == DEFAULT_TOP_P
+    assert data.top_k == DEFAULT_TOP_K
+    if DEFAULT_TEMPERATURE == 0.0:
+        # SGLang encodes greedy sampling as temperature=1.0 with top_k=1.
+        assert sampling_params.temperature == 1.0
+        assert sampling_params.top_k == 1
+    else:
+        assert sampling_params.temperature == DEFAULT_TEMPERATURE
+        assert sampling_params.top_p == DEFAULT_TOP_P
+        assert sampling_params.top_k == DEFAULT_TOP_K
+
+
+def test_request_builder_preserves_sampling_overrides() -> None:
+    request_builder = _request_builder()
+
+    data = request_builder(
+        _payload(
+            params={
+                "temperature": 0.0,
+                "top_p": 0.9,
+                "top_k": 25,
+            },
+            metadata={
+                "model": "moss-transcribe-diarize",
+                EXPLICIT_GENERATION_PARAMS_KEY: ["temperature", "top_p", "top_k"],
+            },
+        )
+    )
+
+    assert data.temperature == 0.0
+    assert data.top_p == 0.9
+    assert data.top_k == 25
+
+
+def test_request_builder_ignores_implicit_client_sampling_defaults() -> None:
+    request_builder = _request_builder()
+
+    data = request_builder(
+        _payload(
+            params={
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+            },
+        )
+    )
+
+    assert data.temperature == DEFAULT_TEMPERATURE
+    assert data.top_p == DEFAULT_TOP_P
+    assert data.top_k == DEFAULT_TOP_K
+
+
+def test_request_builder_preserves_explicit_default_valued_overrides() -> None:
+    request_builder = _request_builder()
+
+    data = request_builder(
+        _payload(
+            params={
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+            },
+            metadata={
+                "model": "moss-transcribe-diarize",
+                EXPLICIT_GENERATION_PARAMS_KEY: ["temperature", "top_p", "top_k"],
+            },
+        )
+    )
+
+    assert data.temperature == 1.0
+    assert data.top_p == 1.0
+    assert data.top_k == -1
+
+
+def test_request_builder_ignores_openai_transcription_temperature_default() -> None:
+    request_builder = _request_builder()
+
+    data = request_builder(
+        _payload(
+            params={"temperature": 0.0},
+            metadata={"model": "moss-transcribe-diarize"},
+        )
+    )
+
+    assert data.temperature == DEFAULT_TEMPERATURE
+
+
 def test_request_builder_uses_default_prompt_for_empty_transcription_prompt() -> None:
     processor = FakeProcessor()
     request_builder = _request_builder(processor)
@@ -125,21 +241,17 @@ def test_request_builder_uses_default_prompt_for_empty_transcription_prompt() ->
     )
 
 
-def test_request_builder_preserves_audio_data_sample_list_as_one_waveform() -> None:
+def test_request_builder_rejects_direct_waveform_list() -> None:
     request_builder = _request_builder()
 
-    data = request_builder(_payload_with_inputs({"audio_data": [0.0, 0.1, -0.1, 0.0]}))
-
-    assert data.audio_duration_s == 4 / 16000
-    assert len(data.req.multimodal_inputs.mm_items) == 1
+    with pytest.raises(ValueError, match="Unsupported MOSS-Transcribe-Diarize"):
+        request_builder(_payload_with_inputs({"audio_data": [0.0, 0.1, -0.1, 0.0]}))
 
 
 def test_request_builder_accepts_single_audio_from_audios_list() -> None:
     request_builder = _request_builder()
 
-    data = request_builder(
-        _payload_with_inputs({"audios": [np.zeros(1600, dtype=np.float32)]})
-    )
+    data = request_builder(_payload_with_inputs({"audios": [_wav_bytes()]}))
 
     assert data.audio_duration_s == 0.1
     assert len(data.req.multimodal_inputs.mm_items) == 1
@@ -149,11 +261,7 @@ def test_request_builder_rejects_multiple_audios() -> None:
     request_builder = _request_builder()
 
     with pytest.raises(ValueError, match="exactly one audio"):
-        request_builder(
-            _payload_with_inputs(
-                {"audios": [np.zeros(1600, dtype=np.float32), np.zeros(1600)]}
-            )
-        )
+        request_builder(_payload_with_inputs({"audios": [_wav_bytes(), _wav_bytes()]}))
 
 
 def test_request_builder_uses_default_prompt_for_bare_string_audio_source(
@@ -163,7 +271,7 @@ def test_request_builder_uses_default_prompt_for_bare_string_audio_source(
     request_builder = _request_builder(processor)
     monkeypatch.setattr(
         request_builders,
-        "load_audio",
+        "_load_audio",
         lambda source: np.zeros(1600, dtype=np.float32),
     )
 
@@ -184,7 +292,7 @@ def test_request_builder_uses_string_prompt_when_audio_is_supplied_separately() 
             "custom diarization prompt",
             metadata={
                 "model": "moss-transcribe-diarize",
-                "audios": [np.zeros(1600, dtype=np.float32)],
+                "audios": [_wav_bytes()],
             },
         )
     )

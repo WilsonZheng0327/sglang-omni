@@ -13,9 +13,7 @@ from sglang_omni.model_runner.base import ModelRunner
 from sglang_omni.models.fun_asr.configuration_fun_asr import (  # noqa: F401 — registers fun_asr_nano AutoConfig + FunAsrNanoFeatureExtractor
     FunAsrNanoConfig,
 )
-from sglang_omni.models.fun_asr.request_builders import (
-    make_fun_asr_scheduler_adapters,
-)
+from sglang_omni.models.fun_asr.request_builders import make_fun_asr_scheduler_adapters
 from sglang_omni.models.fun_asr.tool_funcs.audio_lengths import (
     fun_asr_low_frame_rate_length,
 )
@@ -79,7 +77,9 @@ def create_sglang_fun_asr_executor(
 
     server_args = build_sglang_server_args(
         model_path,
-        context_length=encoder_token_count + int(max_new_tokens) + prompt_overhead_tokens,
+        context_length=encoder_token_count
+        + int(max_new_tokens)
+        + prompt_overhead_tokens,
         **overrides,
     )
 

@@ -3,9 +3,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import io
 import logging
 import re
 import time
@@ -14,7 +11,6 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
-import torchaudio
 from sglang.srt.managers.schedule_batch import (
     Modality,
     MultimodalDataItem,
@@ -23,8 +19,10 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.sampling.sampling_params import SamplingParams
 
-from sglang_omni.proto import StagePayload
+from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
+from sglang_omni.scheduling.messages import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend import SGLangARRequestData
+from sglang_omni.utils.audio import audio_fingerprint, audio_fingerprint_int, load_audio
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +31,9 @@ _AUDIO_PAD = "<|audio_pad|>"
 _AUDIO_START = "<|audio_start|>"
 _AUDIO_END = "<|audio_end|>"
 _SPECIAL_TOKEN_RE = re.compile(r"<\|(?:im_start|im_end|endoftext)\|>")
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_TOP_P = 0.95
+DEFAULT_TOP_K = 50
 # Note (yichi): MOSS-Transcribe-Diarize is an audio LLM: a Qwen3 text decoder
 # over Whisper audio embeddings, trained on a fixed transcribe+diarize
 # instruction with the timestamped/speaker-labelled transcript as the target
@@ -97,19 +98,7 @@ def _has_metadata_audio_source(payload: StagePayload) -> bool:
     )
 
 
-def _decode_data_uri(value: str) -> bytes | None:
-    if not value.startswith("data:"):
-        return None
-    _, _, payload = value.partition(",")
-    if not payload:
-        return None
-    try:
-        return base64.b64decode(payload)
-    except Exception as exc:
-        raise ValueError("Invalid base64 audio data URI") from exc
-
-
-def load_audio(source: Any) -> np.ndarray:
+def _load_audio(source: Any) -> np.ndarray:
     if isinstance(source, dict):
         if source.get("data") is not None:
             source = source["data"]
@@ -117,61 +106,41 @@ def load_audio(source: Any) -> np.ndarray:
             source = source["path"]
         elif source.get("url") is not None:
             source = source["url"]
-
-    if isinstance(source, memoryview):
-        source = source.tobytes()
-    if isinstance(source, bytearray):
-        source = bytes(source)
-    if isinstance(source, str):
-        decoded = _decode_data_uri(source)
-        if decoded is not None:
-            source = decoded
-    if isinstance(source, (list, tuple)):
-        try:
-            source = np.asarray(source, dtype=np.float32)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "MOSS-Transcribe-Diarize audio_data must be a single numeric waveform"
-            ) from exc
-
-    if isinstance(source, bytes):
-        audio, sample_rate = torchaudio.load(io.BytesIO(source))
-    elif isinstance(source, str):
-        audio, sample_rate = torchaudio.load(source)
-    elif isinstance(source, np.ndarray):
-        if source.size == 0:
-            raise ValueError("MOSS-Transcribe-Diarize audio input is empty")
-        audio = torch.from_numpy(source)
-        sample_rate = _SAMPLE_RATE
-    elif torch.is_tensor(source):
-        audio = source
-        sample_rate = _SAMPLE_RATE
-    else:
-        raise ValueError(
-            f"Unsupported MOSS-Transcribe-Diarize audio input: {type(source).__name__}"
-        )
-
-    if audio.ndim == 1:
-        audio = audio.unsqueeze(0)
-    if audio.ndim == 2 and audio.shape[0] > 1:
-        audio = audio.mean(dim=0, keepdim=True)
-    audio = audio.squeeze(0).to(torch.float32)
-    if sample_rate != _SAMPLE_RATE:
-        audio = torchaudio.functional.resample(audio, sample_rate, _SAMPLE_RATE)
-    return audio.cpu().numpy()
+    return load_audio(
+        source,
+        source_name="MOSS-Transcribe-Diarize",
+        target_sample_rate=_SAMPLE_RATE,
+    )
 
 
-def _audio_fingerprint(audio: np.ndarray) -> str:
-    contiguous = np.ascontiguousarray(audio, dtype=np.float32)
-    return hashlib.blake2b(contiguous.tobytes(), digest_size=16).hexdigest()
+def _explicit_generation_fields(metadata: dict[str, Any]) -> set[str]:
+    """Sampling fields the caller set explicitly (see EXPLICIT_GENERATION_PARAMS_KEY).
+
+    Anything not listed here resolves to the model's own default, so a client
+    layer that fills every SamplingParams field with a placeholder no longer
+    shadows the MOSS defaults.
+    """
+    fields = metadata.get(EXPLICIT_GENERATION_PARAMS_KEY)
+    if isinstance(fields, (list, tuple)):
+        return {str(field) for field in fields}
+    return set()
 
 
-def _audio_fingerprint_int(fingerprint: str) -> int:
-    return int(fingerprint[:16], 16)
+def _sampling_param(
+    params: dict[str, Any],
+    explicit_fields: set[str],
+    field: str,
+    default: Any,
+    cast: Callable[[Any], Any],
+) -> Any:
+    if field not in explicit_fields:
+        return default
+    value = params.get(field)
+    return default if value is None else cast(value)
 
 
 def _decode_token_ids(
-    tokenizer: Any, token_ids: list[int], *, skip_special_tokens: bool
+    tokenizer: Any, token_ids: list[int], skip_special_tokens: bool
 ) -> str:
     try:
         return tokenizer.decode(
@@ -264,9 +233,11 @@ def make_moss_transcribe_diarize_scheduler_adapters(
 
     def request_builder(payload: StagePayload) -> MossTranscribeDiarizeRequestData:
         params = payload.request.params or {}
-        audio = load_audio(_audio_source_from_payload(payload))
+        metadata = payload.request.metadata or {}
+        explicit_fields = _explicit_generation_fields(metadata)
+        audio = _load_audio(_audio_source_from_payload(payload))
         audio_duration_s = float(len(audio) / _SAMPLE_RATE)
-        fingerprint = _audio_fingerprint(audio)
+        fingerprint = audio_fingerprint(audio)
         prompt = _prompt_from_payload(payload, processor)
 
         encoded = processor(
@@ -286,7 +257,7 @@ def make_moss_transcribe_diarize_scheduler_adapters(
 
         audio_item = MultimodalDataItem(
             modality=Modality.AUDIO,
-            hash=_audio_fingerprint_int(fingerprint),
+            hash=audio_fingerprint_int(fingerprint),
             feature=features,
             model_specific_data={
                 "audio_feature_lengths": audio_feature_lengths,
@@ -309,12 +280,17 @@ def make_moss_transcribe_diarize_scheduler_adapters(
             audio_end_id=audio_end_id,
         )
 
-        temperature = float(params.get("temperature") or 0.0)
+        temperature = _sampling_param(
+            params, explicit_fields, "temperature", DEFAULT_TEMPERATURE, float
+        )
+        top_p = _sampling_param(params, explicit_fields, "top_p", DEFAULT_TOP_P, float)
+        top_k = _sampling_param(params, explicit_fields, "top_k", DEFAULT_TOP_K, int)
         request_max_new_tokens = int(params.get("max_new_tokens") or max_new_tokens)
         sampling_params = SamplingParams(
             max_new_tokens=request_max_new_tokens,
             temperature=temperature,
-            top_p=float(params.get("top_p") or 1.0),
+            top_p=top_p,
+            top_k=top_k,
             stop_token_ids=[eos_token_id],
         )
         sampling_params.normalize(tokenizer=None)
@@ -344,6 +320,8 @@ def make_moss_transcribe_diarize_scheduler_adapters(
             prompt_token_ids=padded_input_ids,
             max_new_tokens=request_max_new_tokens,
             temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
             audio_duration_s=audio_duration_s,
             language=str(params.get("language") or "auto"),
             engine_start_s=time.perf_counter(),
@@ -383,10 +361,99 @@ def make_moss_transcribe_diarize_scheduler_adapters(
     return request_builder, result_adapter
 
 
+def make_moss_transcribe_diarize_stream_output_builder(
+    tokenizer: Any,
+    eos_token_id: int | None = None,
+    min_emit_interval_s: float = 0.0,
+) -> Callable[[str, Any, Any], list[OutgoingMessage]]:
+    tokenizer_eos = tokenizer.eos_token_id
+    resolved_eos = (
+        eos_token_id
+        if eos_token_id is not None
+        else (int(tokenizer_eos) if tokenizer_eos is not None else None)
+    )
+
+    def _build_stream_output(
+        request_id: str, req_data: Any, req_output: Any
+    ) -> list[OutgoingMessage]:
+        if req_data.req is None or req_output.data is None:
+            return []
+        req = req_data.req
+        # note (guozhihao): while chunked prefill is still consuming prompt tokens, suppress
+        # emission — prompt-side states would masquerade as output text.
+        if req.is_chunked > 0:
+            return []
+
+        if req_data.stage_payload is None:
+            return []
+        stage_payload = req_data.stage_payload
+        if not (stage_payload.request.params or {}).get("stream", False):
+            return []
+
+        try:
+            token_id = int(req_output.data)
+        except (TypeError, ValueError):
+            return []
+
+        try:
+            pending = req._moss_stream_pending_ids
+        except AttributeError:
+            pending = []
+            req._moss_stream_pending_ids = pending
+
+        is_eos = resolved_eos is not None and token_id == resolved_eos
+        if not is_eos:
+            pending.append(token_id)
+        if not pending:
+            return []
+
+        # note (guozhihao): rate-limit by holding tokens until the interval elapses;
+        # last_emit == 0.0 means nothing emitted yet (first delta goes out immediately),
+        # and EOS always flushes the remaining buffer.
+        now = time.perf_counter()
+        try:
+            last_emit = req._moss_stream_last_emit_t
+        except AttributeError:
+            last_emit = 0.0
+        if (
+            not is_eos
+            and min_emit_interval_s > 0.0
+            and last_emit > 0.0
+            and (now - last_emit) < min_emit_interval_s
+        ):
+            return []
+
+        delta = _decode_token_ids(tokenizer, pending, skip_special_tokens=True)
+        if delta.endswith("\ufffd"):
+            return []
+        pending.clear()
+        if not delta:
+            return []
+
+        req._moss_stream_last_emit_t = now
+
+        return [
+            OutgoingMessage(
+                request_id=request_id,
+                type="stream",
+                target=None,
+                data={
+                    "text": delta,
+                    "modality": "text",
+                    "stage_name": "asr",
+                },
+                metadata={"modality": "text", "token_id": token_id},
+            )
+        ]
+
+    return _build_stream_output
+
+
 __all__ = [
     "DEFAULT_TRANSCRIBE_DIARIZE_PROMPT",
     "MossTranscribeDiarizeRequestData",
     "load_audio",
     "make_moss_transcribe_diarize_scheduler_adapters",
+    "make_moss_transcribe_diarize_stream_output_builder",
     "postprocess_moss_transcribe_diarize_text",
 ]

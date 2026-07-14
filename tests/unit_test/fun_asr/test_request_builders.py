@@ -41,7 +41,9 @@ class _FakeTokenizer:
         # placeholder span, so the surrounding text need not be real tokens.
         audio_pad_count = text.count(_AUDIO_PAD)
         # system(3) + user-open(2) + [pad]*N + user-close/assistant(4)
-        input_ids = [10, 11, 12, 13, 14] + [_AUDIO_PAD_ID] * audio_pad_count + [15, 16, 17, 18]
+        input_ids = (
+            [10, 11, 12, 13, 14] + [_AUDIO_PAD_ID] * audio_pad_count + [15, 16, 17, 18]
+        )
         return SimpleNamespace(input_ids=input_ids)
 
     def decode(
@@ -68,7 +70,13 @@ class _FakeTokenizer:
 def _feature_extractor(num_lfr_frames: int):
     """Stand-in for FunAsrNanoFeatureExtractor: returns [1, 560, T_lfr]."""
 
-    def _call(audio, sampling_rate=None, return_tensors=None, return_attention_mask=True, padding="longest"):
+    def _call(
+        audio,
+        sampling_rate=None,
+        return_tensors=None,
+        return_attention_mask=True,
+        padding="longest",
+    ):
         return {
             "input_features": torch.zeros((1, 560, num_lfr_frames)),
             "attention_mask": torch.ones((1, num_lfr_frames), dtype=torch.long),
@@ -105,7 +113,10 @@ def test_fun_asr_request_builder_records_inclusive_audio_offsets(monkeypatch) ->
     start, end = audio_item.offsets[0]
     assert audio_item.feature_attention_mask.shape == (1, num_lfr_frames)
     assert end - start + 1 == num_audio_tokens
-    assert data.prompt_token_ids[start : end + 1] == [audio_item.pad_value] * num_audio_tokens
+    assert (
+        data.prompt_token_ids[start : end + 1]
+        == [audio_item.pad_value] * num_audio_tokens
+    )
     # pad_value replaces the placeholder span (general_mm_embed_routine matches it
     # by pad_value, not by the original <|object_ref_start|> token id)
     assert audio_item.pad_value != _AUDIO_PAD_ID

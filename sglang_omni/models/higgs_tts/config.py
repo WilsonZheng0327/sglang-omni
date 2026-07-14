@@ -22,10 +22,15 @@ class HiggsTtsPipelineConfig(PipelineConfig):
     """
 
     architecture: ClassVar[str] = "HiggsMultimodalQwen3ForConditionalGeneration"
+    requires_model_capabilities: ClassVar[bool] = True
 
     @classmethod
     def generation_sglang_role_to_stage(cls) -> dict[str, str]:
         return {"generation": "tts_engine"}
+
+    @classmethod
+    def mem_fraction_role_to_stage(cls) -> dict[str, str]:
+        return {"talker": "tts_engine"}
 
     model_path: str
     stages: list[StageConfig] = [

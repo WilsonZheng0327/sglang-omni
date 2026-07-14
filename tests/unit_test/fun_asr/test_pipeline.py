@@ -12,9 +12,7 @@ from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 
 
 def test_fun_asr_config_uses_batched_stage_with_32_running_requests() -> None:
-    config = FunASRPipelineConfig(
-        model_path="FunAudioLLM/Fun-ASR-Nano-2512-hf"
-    )
+    config = FunASRPipelineConfig(model_path="FunAudioLLM/Fun-ASR-Nano-2512-hf")
 
     assert config.entry_stage == "asr"
     assert [stage.name for stage in config.stages] == ["asr"]

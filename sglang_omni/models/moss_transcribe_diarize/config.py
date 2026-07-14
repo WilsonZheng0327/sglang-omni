@@ -18,6 +18,14 @@ class MossTranscribeDiarizePipelineConfig(PipelineConfig):
 
     architecture: ClassVar[str] = "MossTranscribeDiarizeForConditionalGeneration"
 
+    @classmethod
+    def mem_fraction_role_to_stage(cls) -> dict[str, str]:
+        return {"asr": "asr"}
+
+    @classmethod
+    def generation_sglang_role_to_stage(cls) -> dict[str, str]:
+        return {"generation": "asr"}
+
     model_path: str
     entry_stage: str = "asr"
     stages: list[StageConfig] = [
@@ -28,6 +36,7 @@ class MossTranscribeDiarizePipelineConfig(PipelineConfig):
             factory_args={
                 "device": "cuda:0",
                 "max_running_requests": 16,
+                "encoder_cache_size_bytes": 4 * 1024**3,
                 "request_build_max_workers": 2,
                 "request_build_max_pending": 16,
             },
