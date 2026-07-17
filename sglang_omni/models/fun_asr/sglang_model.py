@@ -150,17 +150,20 @@ class EncoderLayerSANM(nn.Module):
 
 
 class PositionwiseFeedForward(nn.Module):
-    """funasr PositionwiseFeedForward: w_2(relu(w_1(x)))."""
+    """funasr PositionwiseFeedForward: linear2(relu(linear1(x))).
+
+    Attribute names follow the HF split-layout checkpoint.
+    """
 
     def __init__(self, idim: int, hidden_units: int, dropout_rate: float) -> None:
         super().__init__()
-        self.w_1 = nn.Linear(idim, hidden_units)
-        self.w_2 = nn.Linear(hidden_units, idim)
+        self.linear1 = nn.Linear(idim, hidden_units)
+        self.linear2 = nn.Linear(hidden_units, idim)
         self.dropout = nn.Dropout(dropout_rate)
         self.activation = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.w_2(self.dropout(self.activation(self.w_1(x))))
+        return self.linear2(self.dropout(self.activation(self.linear1(x))))
 
 
 class FunAsrNanoAudioEncoder(nn.Module):
@@ -333,9 +336,9 @@ class FunAsrNanoAdaptor(nn.Module):
         self.encoder_dim = encoder_dim
         self.llm_dim = llm_dim
         self.k = downsample_rate
-        self.linear1 = nn.Linear(encoder_dim * self.k, ffn_dim)
+        self.linear_1 = nn.Linear(encoder_dim * self.k, ffn_dim)
         self.relu = nn.ReLU()
-        self.linear2 = nn.Linear(ffn_dim, llm_dim)
+        self.linear_2 = nn.Linear(ffn_dim, llm_dim)
 
         ffn_hidden = llm_dim // 4
         self.blocks = nn.ModuleList(
@@ -351,9 +354,9 @@ class FunAsrNanoAdaptor(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.linear1(x)
+        x = self.linear_1(x)
         x = self.relu(x)
-        x = self.linear2(x)
+        x = self.linear_2(x)
         for block in self.blocks:
             x = block(x)
         return x
@@ -468,6 +471,13 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
         return hidden_states
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        # Checkpoint layout is the HF "split layout" (transformers#46180):
+        #   model.audio_tower.*          → audio_encoder.*
+        #   model.multi_modal_projector.* → audio_adaptor.*
+        #   model.language_model.*        → language_model.model.*
+        # Module attribute names (feed_forward.linear1/linear2, linear_1/
+        # linear_2, ...) already match the checkpoint, so only these prefixes
+        # need remapping.
         # Qwen3 LLM: q/k/v → qkv_proj, gate/up → gate_up_proj (sglang stacked).
         llm_stacked_params = [
             ("qkv_proj", "q_proj", "q"),
@@ -477,6 +487,7 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
             ("gate_up_proj", "up_proj", 1),
         ]
         params_dict = dict(self.named_parameters(remove_duplicate=False))
+        loaded_audio_params: set[str] = set()
 
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
@@ -489,11 +500,13 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
             ):
                 continue
 
-            if name.startswith("model.audio_encoder."):
-                name = name.replace("model.audio_encoder.", "audio_encoder.", 1)
+            if name.startswith("model.audio_tower."):
+                name = name.replace("model.audio_tower.", "audio_encoder.", 1)
                 is_llm = False
-            elif name.startswith("model.audio_adaptor."):
-                name = name.replace("model.audio_adaptor.", "audio_adaptor.", 1)
+            elif name.startswith("model.multi_modal_projector."):
+                name = name.replace(
+                    "model.multi_modal_projector.", "audio_adaptor.", 1
+                )
                 is_llm = False
             elif name.startswith("model.language_model."):
                 name = name.replace("model.language_model.", "language_model.model.", 1)
@@ -526,6 +539,27 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
             param = params_dict[name]
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, loaded_weight)
+            if name.startswith(("audio_encoder.", "audio_adaptor.")):
+                loaded_audio_params.add(name)
+
+        # A checkpoint-layout drift here fails silently (unmatched names are
+        # skipped) and the model then transcribes everything as "/sil". Fail
+        # loudly instead if any encoder/adaptor parameter was never loaded.
+        expected_audio_params = {
+            n
+            for n in params_dict
+            if n.startswith(("audio_encoder.", "audio_adaptor."))
+        }
+        missing_audio_params = expected_audio_params - loaded_audio_params
+        if missing_audio_params:
+            sample = ", ".join(sorted(missing_audio_params)[:5])
+            raise RuntimeError(
+                f"Fun-ASR checkpoint did not provide weights for "
+                f"{len(missing_audio_params)} audio encoder/adaptor parameters "
+                f"(e.g. {sample}). The checkpoint weight layout likely changed; "
+                f"expected the HF split layout with model.audio_tower.* and "
+                f"model.multi_modal_projector.* prefixes."
+            )
 
 
 EntryClass = FunAsrNanoForConditionalGeneration
