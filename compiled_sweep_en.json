@@ -1,0 +1,758 @@
+{
+  "config": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "meta": "zhaochenyang20/seed-tts-eval-arrow",
+    "lang": "en",
+    "model_path": "FunAudioLLM/Fun-ASR-Nano-2512-hf",
+    "num_samples": 1088,
+    "concurrencies": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "repeats": 3,
+    "warmup": true
+  },
+  "results": [
+    {
+      "concurrency": 1,
+      "repeats": 3,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.01725181598062954,
+        "min": 0.01725181598062954,
+        "max": 0.01725181598062954
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 58.883177612287305,
+        "min": 58.40120069589466,
+        "max": 59.46289960760623
+      },
+      "throughput_samples_per_s": {
+        "mean": 18.47828793425815,
+        "min": 18.29712320084754,
+        "max": 18.629753961145553
+      },
+      "latency_mean_s": {
+        "mean": 0.053873689515931605,
+        "min": 0.05343154153053868,
+        "max": 0.05438311227429521
+      },
+      "latency_p95_s": {
+        "mean": 0.06474017888928453,
+        "min": 0.0641754809534177,
+        "max": 0.06515944171696901
+      },
+      "latency_p99_s": {
+        "mean": 0.07309156535348531,
+        "min": 0.07165019694250065,
+        "max": 0.07491098166909063
+      },
+      "rtf_mean": {
+        "mean": 0.01169072840423269,
+        "min": 0.011597165431260084,
+        "max": 0.011799049024273622
+      },
+      "rtf_p95": {
+        "mean": 0.0148,
+        "min": 0.0147,
+        "max": 0.0149
+      },
+      "per_repeat": [
+        {
+          "concurrency": 1,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 59.46289960760623,
+          "throughput_samples_per_s": 18.29712320084754,
+          "latency_mean_s": 0.05438311227429521,
+          "latency_p95_s": 0.06515944171696901,
+          "latency_p99_s": 0.07165019694250065,
+          "rtf_mean": 0.011799049024273622,
+          "rtf_p95": 0.0149,
+          "worker": {}
+        },
+        {
+          "concurrency": 1,
+          "repeat": 2,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 58.78543253336102,
+          "throughput_samples_per_s": 18.507986640781365,
+          "latency_mean_s": 0.053806414742960926,
+          "latency_p95_s": 0.06488561399746687,
+          "latency_p99_s": 0.07491098166909063,
+          "rtf_mean": 0.011675970757164362,
+          "rtf_p95": 0.0148,
+          "worker": {}
+        },
+        {
+          "concurrency": 1,
+          "repeat": 3,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 58.40120069589466,
+          "throughput_samples_per_s": 18.629753961145553,
+          "latency_mean_s": 0.05343154153053868,
+          "latency_p95_s": 0.0641754809534177,
+          "latency_p99_s": 0.07271351744886466,
+          "rtf_mean": 0.011597165431260084,
+          "rtf_p95": 0.0147,
+          "worker": {}
+        }
+      ]
+    },
+    {
+      "concurrency": 2,
+      "repeats": 3,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.01725181598062954,
+        "min": 0.01725181598062954,
+        "max": 0.01725181598062954
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 36.00234827833871,
+        "min": 35.557502665091306,
+        "max": 36.748479364905506
+      },
+      "throughput_samples_per_s": {
+        "mean": 30.226758270113162,
+        "min": 29.606667236387228,
+        "max": 30.598324360617923
+      },
+      "latency_mean_s": {
+        "mean": 0.06594060727551479,
+        "min": 0.06510877694766831,
+        "max": 0.06733012021140894
+      },
+      "latency_p95_s": {
+        "mean": 0.08380063850587854,
+        "min": 0.08131285663694143,
+        "max": 0.0861283744452521
+      },
+      "latency_p99_s": {
+        "mean": 0.09853912615062044,
+        "min": 0.09353441094979643,
+        "max": 0.10684165170881897
+      },
+      "rtf_mean": {
+        "mean": 0.014330430518098273,
+        "min": 0.014169500191517104,
+        "max": 0.014624383402302257
+      },
+      "rtf_p95": {
+        "mean": 0.019133333333333332,
+        "min": 0.0189,
+        "max": 0.0195
+      },
+      "per_repeat": [
+        {
+          "concurrency": 2,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 35.70106280501932,
+          "throughput_samples_per_s": 30.475283213334333,
+          "latency_mean_s": 0.06538292466746712,
+          "latency_p95_s": 0.08396068443544208,
+          "latency_p99_s": 0.09524131579324589,
+          "rtf_mean": 0.014197407960475458,
+          "rtf_p95": 0.0189,
+          "worker": {}
+        },
+        {
+          "concurrency": 2,
+          "repeat": 2,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 35.557502665091306,
+          "throughput_samples_per_s": 30.598324360617923,
+          "latency_mean_s": 0.06510877694766831,
+          "latency_p95_s": 0.08131285663694143,
+          "latency_p99_s": 0.09353441094979643,
+          "rtf_mean": 0.014169500191517104,
+          "rtf_p95": 0.019,
+          "worker": {}
+        },
+        {
+          "concurrency": 2,
+          "repeat": 3,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 36.748479364905506,
+          "throughput_samples_per_s": 29.606667236387228,
+          "latency_mean_s": 0.06733012021140894,
+          "latency_p95_s": 0.0861283744452521,
+          "latency_p99_s": 0.10684165170881897,
+          "rtf_mean": 0.014624383402302257,
+          "rtf_p95": 0.0195,
+          "worker": {}
+        }
+      ]
+    },
+    {
+      "concurrency": 4,
+      "repeats": 3,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.01725181598062954,
+        "min": 0.01725181598062954,
+        "max": 0.01725181598062954
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 25.282786678367604,
+        "min": 23.894937437027693,
+        "max": 26.919345038942993
+      },
+      "throughput_samples_per_s": {
+        "mean": 43.13681561054965,
+        "min": 40.41703089083482,
+        "max": 45.53265740357331
+      },
+      "latency_mean_s": {
+        "mean": 0.09259847067476264,
+        "min": 0.08756140581082196,
+        "max": 0.09854518413939171
+      },
+      "latency_p95_s": {
+        "mean": 0.1326460253136853,
+        "min": 0.1182709082961082,
+        "max": 0.1476124712964519
+      },
+      "latency_p99_s": {
+        "mean": 0.15811192917171843,
+        "min": 0.14443932013586136,
+        "max": 0.17158086343202722
+      },
+      "rtf_mean": {
+        "mean": 0.02016378317960639,
+        "min": 0.01903014317490853,
+        "max": 0.02153460104856628
+      },
+      "rtf_p95": {
+        "mean": 0.029833333333333333,
+        "min": 0.0265,
+        "max": 0.0338
+      },
+      "per_repeat": [
+        {
+          "concurrency": 4,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 23.894937437027693,
+          "throughput_samples_per_s": 45.53265740357331,
+          "latency_mean_s": 0.08756140581082196,
+          "latency_p95_s": 0.1182709082961082,
+          "latency_p99_s": 0.14443932013586136,
+          "rtf_mean": 0.01903014317490853,
+          "rtf_p95": 0.0265,
+          "worker": {}
+        },
+        {
+          "concurrency": 4,
+          "repeat": 2,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 25.03407755913213,
+          "throughput_samples_per_s": 43.4607585372408,
+          "latency_mean_s": 0.09168882207407425,
+          "latency_p95_s": 0.1320546963484958,
+          "latency_p99_s": 0.1583156039472667,
+          "rtf_mean": 0.01992660531534436,
+          "rtf_p95": 0.0292,
+          "worker": {}
+        },
+        {
+          "concurrency": 4,
+          "repeat": 3,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 26.919345038942993,
+          "throughput_samples_per_s": 40.41703089083482,
+          "latency_mean_s": 0.09854518413939171,
+          "latency_p95_s": 0.1476124712964519,
+          "latency_p99_s": 0.17158086343202722,
+          "rtf_mean": 0.02153460104856628,
+          "rtf_p95": 0.0338,
+          "worker": {}
+        }
+      ]
+    },
+    {
+      "concurrency": 8,
+      "repeats": 3,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.01725181598062954,
+        "min": 0.01725181598062954,
+        "max": 0.01725181598062954
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 16.724080360339332,
+        "min": 16.4392472342588,
+        "max": 16.9616851657629
+      },
+      "throughput_samples_per_s": {
+        "mean": 65.06678148033932,
+        "min": 64.14456991550132,
+        "max": 66.1830790969946
+      },
+      "latency_mean_s": {
+        "mean": 0.12245795060366885,
+        "min": 0.12042063861650497,
+        "max": 0.12419554930623716
+      },
+      "latency_p95_s": {
+        "mean": 0.16524023325182485,
+        "min": 0.16158209459390482,
+        "max": 0.16747377030551414
+      },
+      "latency_p99_s": {
+        "mean": 0.1895685321154693,
+        "min": 0.18203467702958728,
+        "max": 0.19738006739411493
+      },
+      "rtf_mean": {
+        "mean": 0.02657184783018651,
+        "min": 0.026098452461156524,
+        "max": 0.027003295358518115
+      },
+      "rtf_p95": {
+        "mean": 0.03673333333333333,
+        "min": 0.0362,
+        "max": 0.0374
+      },
+      "per_repeat": [
+        {
+          "concurrency": 8,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 16.4392472342588,
+          "throughput_samples_per_s": 66.1830790969946,
+          "latency_mean_s": 0.12042063861650497,
+          "latency_p95_s": 0.16158209459390482,
+          "latency_p99_s": 0.18203467702958728,
+          "rtf_mean": 0.026098452461156524,
+          "rtf_p95": 0.0362,
+          "worker": {}
+        },
+        {
+          "concurrency": 8,
+          "repeat": 2,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 16.9616851657629,
+          "throughput_samples_per_s": 64.14456991550132,
+          "latency_mean_s": 0.12419554930623716,
+          "latency_p95_s": 0.16666483485605557,
+          "latency_p99_s": 0.19738006739411493,
+          "rtf_mean": 0.027003295358518115,
+          "rtf_p95": 0.0374,
+          "worker": {}
+        },
+        {
+          "concurrency": 8,
+          "repeat": 3,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 16.7713086809963,
+          "throughput_samples_per_s": 64.87269542852201,
+          "latency_mean_s": 0.12275766388826442,
+          "latency_p95_s": 0.16747377030551414,
+          "latency_p99_s": 0.18929085192270576,
+          "rtf_mean": 0.02661379567088489,
+          "rtf_p95": 0.0366,
+          "worker": {}
+        }
+      ]
+    },
+    {
+      "concurrency": 16,
+      "repeats": 3,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.01725181598062954,
+        "min": 0.01725181598062954,
+        "max": 0.01725181598062954
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 12.190802500428012,
+        "min": 12.021373060997576,
+        "max": 12.501731935888529
+      },
+      "throughput_samples_per_s": {
+        "mean": 89.27636444579196,
+        "min": 87.02794185473576,
+        "max": 90.50546842522779
+      },
+      "latency_mean_s": {
+        "mean": 0.1784771910884849,
+        "min": 0.176033044952954,
+        "max": 0.18301032121577437
+      },
+      "latency_p95_s": {
+        "mean": 0.24338208550276852,
+        "min": 0.23885566466487942,
+        "max": 0.24694522225763646
+      },
+      "latency_p99_s": {
+        "mean": 0.29004203234799175,
+        "min": 0.27553191183600534,
+        "max": 0.31347778158727985
+      },
+      "rtf_mean": {
+        "mean": 0.038726321906652636,
+        "min": 0.0381466889450746,
+        "max": 0.03973669635085125
+      },
+      "rtf_p95": {
+        "mean": 0.05386666666666667,
+        "min": 0.0531,
+        "max": 0.055
+      },
+      "per_repeat": [
+        {
+          "concurrency": 16,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 12.049302504397929,
+          "throughput_samples_per_s": 90.29568305741233,
+          "latency_mean_s": 0.17638820709672634,
+          "latency_p95_s": 0.24434536958578965,
+          "latency_p99_s": 0.27553191183600534,
+          "rtf_mean": 0.03829558042403206,
+          "rtf_p95": 0.0531,
+          "worker": {}
+        },
+        {
+          "concurrency": 16,
+          "repeat": 2,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 12.021373060997576,
+          "throughput_samples_per_s": 90.50546842522779,
+          "latency_mean_s": 0.176033044952954,
+          "latency_p95_s": 0.23885566466487942,
+          "latency_p99_s": 0.31347778158727985,
+          "rtf_mean": 0.0381466889450746,
+          "rtf_p95": 0.0535,
+          "worker": {}
+        },
+        {
+          "concurrency": 16,
+          "repeat": 3,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 12.501731935888529,
+          "throughput_samples_per_s": 87.02794185473576,
+          "latency_mean_s": 0.18301032121577437,
+          "latency_p95_s": 0.24694522225763646,
+          "latency_p99_s": 0.28111640362069,
+          "rtf_mean": 0.03973669635085125,
+          "rtf_p95": 0.055,
+          "worker": {}
+        }
+      ]
+    },
+    {
+      "concurrency": 32,
+      "repeats": 3,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.01725181598062954,
+        "min": 0.01725181598062954,
+        "max": 0.01725181598062954
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 11.27129019315665,
+        "min": 10.959971726872027,
+        "max": 11.618564375676215
+      },
+      "throughput_samples_per_s": {
+        "mean": 96.58363883220198,
+        "min": 93.6432389424771,
+        "max": 99.27032907689032
+      },
+      "latency_mean_s": {
+        "mean": 0.33002794974691274,
+        "min": 0.3209451425376328,
+        "max": 0.3400371845410144
+      },
+      "latency_p95_s": {
+        "mean": 0.44357470970911267,
+        "min": 0.43668518855702126,
+        "max": 0.44754900564439587
+      },
+      "latency_p99_s": {
+        "mean": 0.7720946248418958,
+        "min": 0.5066005227575079,
+        "max": 1.2884952353546386
+      },
+      "rtf_mean": {
+        "mean": 0.0713594567589477,
+        "min": 0.06940437019091032,
+        "max": 0.07347118518840322
+      },
+      "rtf_p95": {
+        "mean": 0.09866666666666667,
+        "min": 0.0981,
+        "max": 0.099
+      },
+      "per_repeat": [
+        {
+          "concurrency": 32,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 11.618564375676215,
+          "throughput_samples_per_s": 93.6432389424771,
+          "latency_mean_s": 0.3400371845410144,
+          "latency_p95_s": 0.44754900564439587,
+          "latency_p99_s": 1.2884952353546386,
+          "rtf_mean": 0.07347118518840322,
+          "rtf_p95": 0.099,
+          "worker": {}
+        },
+        {
+          "concurrency": 32,
+          "repeat": 2,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 11.235334476921707,
+          "throughput_samples_per_s": 96.83734847723855,
+          "latency_mean_s": 0.329101522162091,
+          "latency_p95_s": 0.4464899349259209,
+          "latency_p99_s": 0.5211881164135411,
+          "rtf_mean": 0.07120281489752955,
+          "rtf_p95": 0.0989,
+          "worker": {}
+        },
+        {
+          "concurrency": 32,
+          "repeat": 3,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.01725181598062954,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 10.959971726872027,
+          "throughput_samples_per_s": 99.27032907689032,
+          "latency_mean_s": 0.3209451425376328,
+          "latency_p95_s": 0.43668518855702126,
+          "latency_p99_s": 0.5066005227575079,
+          "rtf_mean": 0.06940437019091032,
+          "rtf_p95": 0.0981,
+          "worker": {}
+        }
+      ]
+    },
+    {
+      "concurrency": 64,
+      "repeats": 3,
+      "evaluated": 1018,
+      "total": 1088,
+      "skipped": 70,
+      "corpus_wer": {
+        "mean": 0.01775002116432531,
+        "min": 0.01771349638417161,
+        "max": 0.0177712562158637
+      },
+      "per_sample_wer_max": {
+        "mean": 0.3076923076923077,
+        "min": 0.3076923076923077,
+        "max": 0.3076923076923077
+      },
+      "wall_clock_s": {
+        "mean": 10.85019720873485,
+        "min": 10.646882080938667,
+        "max": 11.17835553130135
+      },
+      "throughput_samples_per_s": {
+        "mean": 95.24180367728388,
+        "min": 94.91557117046551,
+        "max": 95.61484688766737
+      },
+      "latency_mean_s": {
+        "mean": 0.6563054426373574,
+        "min": 0.646925503152472,
+        "max": 0.6623931821110034
+      },
+      "latency_p95_s": {
+        "mean": 0.7931172454496845,
+        "min": 0.7781176663236692,
+        "max": 0.8103619888424873
+      },
+      "latency_p99_s": {
+        "mean": 0.8499140543614827,
+        "min": 0.8328573007136582,
+        "max": 0.8776486804708848
+      },
+      "rtf_mean": {
+        "mean": 0.1433468387777409,
+        "min": 0.1413444770068849,
+        "max": 0.14457762413856384
+      },
+      "rtf_p95": {
+        "mean": 0.19326666666666667,
+        "min": 0.1892,
+        "max": 0.1959
+      },
+      "per_repeat": [
+        {
+          "concurrency": 64,
+          "repeat": 1,
+          "evaluated": 1018,
+          "total": 1088,
+          "skipped": 70,
+          "corpus_wer": 0.0177712562158637,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 10.646882080938667,
+          "throughput_samples_per_s": 95.61484688766737,
+          "latency_mean_s": 0.646925503152472,
+          "latency_p95_s": 0.7781176663236692,
+          "latency_p99_s": 0.8392361818999052,
+          "rtf_mean": 0.1413444770068849,
+          "rtf_p95": 0.1892,
+          "worker": {}
+        },
+        {
+          "concurrency": 64,
+          "repeat": 2,
+          "evaluated": 1021,
+          "total": 1088,
+          "skipped": 67,
+          "corpus_wer": 0.01771349638417161,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 10.725354013964534,
+          "throughput_samples_per_s": 95.19499297371875,
+          "latency_mean_s": 0.6595976426485965,
+          "latency_p95_s": 0.7908720811828971,
+          "latency_p99_s": 0.8328573007136582,
+          "rtf_mean": 0.14411841518777394,
+          "rtf_p95": 0.1959,
+          "worker": {}
+        },
+        {
+          "concurrency": 64,
+          "repeat": 3,
+          "evaluated": 1061,
+          "total": 1088,
+          "skipped": 27,
+          "corpus_wer": 0.017765310892940627,
+          "per_sample_wer_max": 0.3076923076923077,
+          "wall_clock_s": 11.17835553130135,
+          "throughput_samples_per_s": 94.91557117046551,
+          "latency_mean_s": 0.6623931821110034,
+          "latency_p95_s": 0.8103619888424873,
+          "latency_p99_s": 0.8776486804708848,
+          "rtf_mean": 0.14457762413856384,
+          "rtf_p95": 0.1947,
+          "worker": {}
+        }
+      ]
+    }
+  ]
+}

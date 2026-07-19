@@ -39,11 +39,15 @@ def _tiny_model() -> SimpleNamespace:
 
 
 def _stub_torch_compile_config(monkeypatch) -> None:
-    # The helper calls sglang's set_torch_compile_config, which mutates global
-    # dynamo/inductor config; keep unit tests side-effect free.
+    # The helper mutates global dynamo/inductor config (sglang's
+    # set_torch_compile_config plus cpp_wrapper); keep unit tests
+    # side-effect free by stubbing the former and restoring the latter.
+    import torch._inductor.config as inductor_config
+
     import sglang.srt.model_executor.cuda_graph_runner as cuda_graph_runner
 
     monkeypatch.setattr(cuda_graph_runner, "set_torch_compile_config", lambda: None)
+    monkeypatch.setattr(inductor_config, "cpp_wrapper", inductor_config.cpp_wrapper)
 
 
 def test_compile_fun_asr_audio_encoder_compiles_forwards_with_dynamic_shapes(
@@ -71,6 +75,11 @@ def test_compile_fun_asr_audio_encoder_compiles_forwards_with_dynamic_shapes(
 
     fun_asr_stages._compile_fun_asr_audio_encoder(model, warmup_lfr_frames=16)
 
+    import torch._inductor.config as inductor_config
+
+    # C++ launcher: the scheduler loop is GIL-contended, so Python Triton
+    # launchers regress serving throughput (f-pr4 E4).
+    assert inductor_config.cpp_wrapper is True
     assert [call["dynamic"] for call in compile_calls] == [True, True]
     assert compile_calls[0]["fn"] == original_tower_forward
     assert compile_calls[1]["fn"] == original_projector_forward

@@ -56,6 +56,13 @@ def _compile_fun_asr_audio_encoder(model: Any, *, warmup_lfr_frames: int = 128) 
         # them would not build the symbolic-length graph.
         raise ValueError(f"warmup_lfr_frames must be >= 2, got {warmup_lfr_frames}")
     set_torch_compile_config()
+    # The scheduler loop is GIL-contended and the encoder is launch-bound, so
+    # Inductor's default Python (Triton) launchers — which hold the GIL for
+    # the whole call — erased the kernel-level win in serving (f-pr4 E4).
+    # cpp_wrapper emits a C++ launcher instead.
+    import torch._inductor.config as inductor_config
+
+    inductor_config.cpp_wrapper = True
     model.audio_tower.forward = torch.compile(model.audio_tower.forward, dynamic=True)
     model.multi_modal_projector.forward = torch.compile(
         model.multi_modal_projector.forward, dynamic=True

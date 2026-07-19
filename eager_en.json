@@ -1,0 +1,88 @@
+{
+  "config": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "meta": "zhaochenyang20/seed-tts-eval-arrow",
+    "lang": "en",
+    "model_path": "FunAudioLLM/Fun-ASR-Nano-2512-hf",
+    "num_samples": 1088,
+    "concurrencies": [
+      1
+    ],
+    "repeats": 1,
+    "warmup": false
+  },
+  "results": [
+    {
+      "concurrency": 1,
+      "repeats": 1,
+      "evaluated": 1088,
+      "total": 1088,
+      "skipped": 0,
+      "corpus_wer": {
+        "mean": 0.017100484261501212,
+        "min": 0.017100484261501212,
+        "max": 0.017100484261501212
+      },
+      "per_sample_wer_max": {
+        "mean": 0.2857142857142857,
+        "min": 0.2857142857142857,
+        "max": 0.2857142857142857
+      },
+      "wall_clock_s": {
+        "mean": 74.16635699570179,
+        "min": 74.16635699570179,
+        "max": 74.16635699570179
+      },
+      "throughput_samples_per_s": {
+        "mean": 14.669724172417604,
+        "min": 14.669724172417604,
+        "max": 14.669724172417604
+      },
+      "latency_mean_s": {
+        "mean": 0.06801677326866946,
+        "min": 0.06801677326866946,
+        "max": 0.06801677326866946
+      },
+      "latency_p95_s": {
+        "mean": 0.09086156575940549,
+        "min": 0.09086156575940549,
+        "max": 0.09086156575940549
+      },
+      "latency_p99_s": {
+        "mean": 0.09746074574533849,
+        "min": 0.09746074574533849,
+        "max": 0.09746074574533849
+      },
+      "rtf_mean": {
+        "mean": 0.014842489832423575,
+        "min": 0.014842489832423575,
+        "max": 0.014842489832423575
+      },
+      "rtf_p95": {
+        "mean": 0.0224,
+        "min": 0.0224,
+        "max": 0.0224
+      },
+      "per_repeat": [
+        {
+          "concurrency": 1,
+          "repeat": 1,
+          "evaluated": 1088,
+          "total": 1088,
+          "skipped": 0,
+          "corpus_wer": 0.017100484261501212,
+          "per_sample_wer_max": 0.2857142857142857,
+          "wall_clock_s": 74.16635699570179,
+          "throughput_samples_per_s": 14.669724172417604,
+          "latency_mean_s": 0.06801677326866946,
+          "latency_p95_s": 0.09086156575940549,
+          "latency_p99_s": 0.09746074574533849,
+          "rtf_mean": 0.014842489832423575,
+          "rtf_p95": 0.0224,
+          "worker": {}
+        }
+      ]
+    }
+  ]
+}
