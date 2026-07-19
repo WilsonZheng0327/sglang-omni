@@ -41,6 +41,11 @@ Usage:
         --port 8000 --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf \
         --concurrencies 1,2,4,8,16,32,64 --repeats 3 --warmup
 
+    # Save per-sample transcripts (e.g. for eager-vs-compiled parity diffs):
+    python -m benchmarks.eval.benchmark_asr_seedtts \
+        --port 8000 --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf \
+        --concurrencies 1 --repeats 1 --dump-transcripts
+
 Reference results on the full SeedTTS EN set (1088 clips, bf16, single RTX
 4080 SUPER 32 GB, DP=1, three repeats plus one discarded warmup per level):
 
@@ -164,7 +169,7 @@ async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
     )
     summary = benchmark_result["summary"]
     speed = benchmark_result["speed"]
-    return {
+    out = {
         "concurrency": concurrency,
         "repeat": repeat,
         "evaluated": summary["evaluated"],
@@ -181,6 +186,9 @@ async def _run_repeat(args, samples, concurrency: int, repeat: int) -> dict:
         "rtf_p95": speed["rtf_p95"],
         "worker": benchmark_result["worker"],
     }
+    if args.dump_transcripts and repeat == 1:
+        out["per_sample"] = benchmark_result["per_sample"]
+    return out
 
 
 def _aggregate(repeats: list[dict]) -> dict:
@@ -282,11 +290,22 @@ def parse_args() -> argparse.Namespace:
         default="asr_seedtts_results.json",
         help="Where to write the full JSON results.",
     )
+    parser.add_argument(
+        "--dump-transcripts",
+        action="store_true",
+        help=(
+            "Also write per-sample ref/hyp transcripts from the first repeat "
+            "of each concurrency to <output>_transcripts.json."
+        ),
+    )
     return parser.parse_args()
 
 
-async def _sweep(args, samples, concurrencies: list[int]) -> list[dict]:
+async def _sweep(
+    args, samples, concurrencies: list[int]
+) -> tuple[list[dict], dict[int, list[dict]]]:
     aggregates: list[dict] = []
+    transcripts: dict[int, list[dict]] = {}
     for concurrency in concurrencies:
         if args.warmup:
             print(f"[conc={concurrency}] warmup pass ...")
@@ -301,6 +320,9 @@ async def _sweep(args, samples, concurrencies: list[int]) -> list[dict]:
         repeats: list[dict] = []
         for repeat in range(1, args.repeats + 1):
             result = await _run_repeat(args, samples, concurrency, repeat)
+            per_sample = result.pop("per_sample", None)
+            if per_sample is not None:
+                transcripts[concurrency] = per_sample
             repeats.append(result)
             print(
                 f"[conc={concurrency} rep={repeat}] "
@@ -315,7 +337,7 @@ async def _sweep(args, samples, concurrencies: list[int]) -> list[dict]:
             if result["worker"].get("per_worker_routed"):
                 print(f"    routed per worker: {result['worker']['per_worker_routed']}")
         aggregates.append(_aggregate(repeats))
-    return aggregates
+    return aggregates, transcripts
 
 
 def main() -> None:
@@ -330,7 +352,7 @@ def main() -> None:
         f"against {args.host}:{args.port} ({args.model_path})"
     )
 
-    aggregates = asyncio.run(_sweep(args, samples, concurrencies))
+    aggregates, transcripts = asyncio.run(_sweep(args, samples, concurrencies))
     _print_table(aggregates)
 
     payload = {
@@ -351,6 +373,24 @@ def main() -> None:
     with open(output_path, "w") as handle:
         json.dump(payload, handle, indent=2)
     print(f"\nWrote results to {output_path}")
+
+    if transcripts:
+        stem, ext = os.path.splitext(output_path)
+        transcripts_path = f"{stem}_transcripts{ext or '.json'}"
+        with open(transcripts_path, "w") as handle:
+            json.dump(
+                {
+                    "config": payload["config"],
+                    "transcripts": {
+                        str(conc): per_sample
+                        for conc, per_sample in transcripts.items()
+                    },
+                },
+                handle,
+                indent=2,
+                ensure_ascii=False,
+            )
+        print(f"Wrote per-sample transcripts to {transcripts_path}")
 
 
 if __name__ == "__main__":

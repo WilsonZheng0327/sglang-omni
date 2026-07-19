@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import torch
 from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from transformers import AutoFeatureExtractor, AutoTokenizer
 
@@ -31,6 +33,46 @@ from sglang_omni.scheduling.sglang_backend import (
 )
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
 
+logger = logging.getLogger(__name__)
+
+
+def _compile_fun_asr_audio_encoder(model: Any, *, warmup_lfr_frames: int = 128) -> None:
+    """Compile the SANM encoder and adaptor with a symbolic sequence length.
+
+    The LFR frame count varies with audio duration, so ``dynamic=True`` builds
+    one symbolic-shape graph instead of specializing per length (which would
+    recompile per new length until Dynamo's recompile limit silently falls
+    back to eager). The bound forwards are compiled rather than wrapping the
+    modules in ``OptimizedModule`` so parameter names stay stable for
+    ``load_weights`` and weight updates. The warmup forward pays the one-time
+    compile cost at startup instead of on the first request; it runs without
+    an explicit grad context because Dynamo guards on grad mode and the omni
+    scheduler event loop invokes forwards in ambient mode.
+    """
+    from sglang.srt.model_executor.cuda_graph_runner import set_torch_compile_config
+
+    if warmup_lfr_frames < 2:
+        # Sizes 0/1 are always shape-specialized by Dynamo; warming up with
+        # them would not build the symbolic-length graph.
+        raise ValueError(f"warmup_lfr_frames must be >= 2, got {warmup_lfr_frames}")
+    set_torch_compile_config()
+    model.audio_tower.forward = torch.compile(model.audio_tower.forward, dynamic=True)
+    model.multi_modal_projector.forward = torch.compile(
+        model.multi_modal_projector.forward, dynamic=True
+    )
+    param = next(model.audio_tower.parameters())
+    warmup = torch.zeros(
+        (1, int(warmup_lfr_frames), int(model.config.encoder_config.input_size)),
+        device=param.device,
+        dtype=param.dtype,
+    )
+    model.multi_modal_projector(model.audio_tower(warmup))
+    logger.info(
+        "Compiled Fun-ASR audio encoder + adaptor "
+        "(dynamic=True, warmup_lfr_frames=%d)",
+        warmup_lfr_frames,
+    )
+
 
 def create_sglang_fun_asr_executor(
     model_path: str,
@@ -42,6 +84,7 @@ def create_sglang_fun_asr_executor(
     mem_fraction_static: float | None = None,
     mm_embedding_cache_size_bytes: int = 0,
     enable_torch_compile: bool = False,
+    enable_encoder_torch_compile: bool = False,
     mm_attention_backend: str | None = None,
     request_build_max_workers: int = 2,
     request_build_max_pending: int | None = 16,
@@ -114,6 +157,12 @@ def create_sglang_fun_asr_executor(
 
     if want_cuda_graph:
         model_worker.model_runner.init_device_graphs()
+
+    # Separate from enable_torch_compile: that flag reaches the sglang server
+    # args and compiles only the LLM decode path; the audio encoder runs in
+    # eager prefill and is compiled here, after weights are loaded.
+    if enable_encoder_torch_compile:
+        _compile_fun_asr_audio_encoder(model_worker.model_runner.model)
 
     init_mm_embedding_cache(mm_embedding_cache_size_bytes)
 

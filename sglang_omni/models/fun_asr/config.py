@@ -28,6 +28,7 @@ class FunASRPipelineConfig(PipelineConfig):
                 "device": "cuda:0",
                 "max_running_requests": 32,
                 "max_new_tokens": 200,
+                "enable_encoder_torch_compile": False,
                 "request_build_max_workers": 2,
                 "request_build_max_pending": 16,
             },
