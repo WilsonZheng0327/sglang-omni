@@ -58,8 +58,8 @@ def _compile_fun_asr_audio_encoder(
     from sglang.srt.model_executor.cuda_graph_runner import set_torch_compile_config
 
     if warmup_lfr_frames < 2:
-        # Sizes 0/1 are always shape-specialized by Dynamo; warming up with
-        # them would not build the symbolic-length graph.
+        # Note (wilsonzheng0327) Sizes 0/1 are always shape-specialized by
+        # Dynamo; warming up with them would not build the symbolic-length graph.
         raise ValueError(f"warmup_lfr_frames must be >= 2, got {warmup_lfr_frames}")
     set_torch_compile_config()
     model.audio_tower.forward = torch.compile(model.audio_tower.forward, dynamic=True)
@@ -71,11 +71,12 @@ def _compile_fun_asr_audio_encoder(
         torch.inference_mode() if warmup_inference_mode else contextlib.nullcontext()
     )
     with warmup_ctx:
-        # The tensor must be *created* inside the context, not just passed
-        # through it: tensors allocated under inference_mode lack the
-        # ADInplaceOrView dispatch key, and Dynamo guards on the key set. A
-        # normal tensor here compiles a graph the service's inference-mode
-        # tensors fail, forcing a full recompile on the first real request.
+        # Note (wilsonzheng0327): tensor must be created inside the context,
+        # not just passed through it; tensors allocated under inference_mode
+        # lack the ADInplaceOrView dispatch key, and Dynamo guards on the key
+        # set, so a normal tensor here compiles a graph the service's
+        # inference-mode tensors fail, forcing a full recompile on the first
+        # real request
         warmup = torch.zeros(
             (1, int(warmup_lfr_frames), int(model.config.encoder_config.input_size)),
             device=param.device,
@@ -175,16 +176,6 @@ def create_sglang_fun_asr_executor(
     if want_cuda_graph:
         model_worker.model_runner.init_device_graphs()
 
-    # Separate from enable_torch_compile: that flag reaches the sglang server
-    # args and compiles only the LLM decode path; the audio encoder runs in
-    # eager prefill and is compiled here, after weights are loaded. The
-    # warmup grad mode must match the serving caller: the pre-LM service
-    # encodes under inference_mode, inline prefill runs in ambient mode.
-    #
-    # NOTE: `enable_pre_lm_encoder` below is introduced by F-PR3 (#1095).
-    # This PR must merge after it; enabling this flag beforehand raises
-    # NameError. F-PR4 is also only a win behind that service — inline on
-    # the scheduler thread the compiled encoder regresses throughput.
     if enable_encoder_torch_compile:
         _compile_fun_asr_audio_encoder(
             model_worker.model_runner.model,
