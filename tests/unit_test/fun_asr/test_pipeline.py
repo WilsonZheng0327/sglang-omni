@@ -56,6 +56,13 @@ def test_fun_asr_stage_default_disables_torch_compile() -> None:
     assert signature.parameters["enable_torch_compile"].default is False
 
 
+def test_fun_asr_stage_default_enables_async_decode() -> None:
+    signature = inspect.signature(fun_asr_stages.create_sglang_fun_asr_executor)
+
+    assert signature.parameters["enable_async_decode"].default is True
+    assert signature.parameters["async_decode_min_batch_size"].default == 2
+
+
 def test_fun_asr_threads_generation_batch_and_request_build_policy(monkeypatch) -> None:
     build_kwargs: dict[str, object] = {}
     validations: list[dict[str, object]] = []
@@ -145,3 +152,5 @@ def test_fun_asr_threads_generation_batch_and_request_build_policy(monkeypatch) 
     ]
     assert scheduler.request_build_max_workers == 2
     assert scheduler.request_build_max_pending == 16
+    assert scheduler.enable_async_decode is True
+    assert scheduler.async_decode_min_batch_size == 2
