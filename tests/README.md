@@ -84,6 +84,8 @@ tests/
     │   ├── test_pipeline.py
     │   └── test_request_builders.py
     ├── fun_asr/
+    │   ├── test_encoder_service.py
+    │   ├── test_model.py
     │   ├── test_pipeline.py
     │   └── test_request_builders.py
     ├── moss_transcribe_diarize/
@@ -200,8 +202,11 @@ Relevant model CI ownership:
   stopped, then transcribes through Qwen3-ASR at concurrency 32.
 - `test_asr_ci_multi_speaker.py`: MOSS-Transcribe-Diarize multi-speaker
   ASR/diarization correctness + speed via the managed router at DP=2. It
-  reuses the movies800 benchmark path, writes
-  `moss_transcribe_diarize_results.json`, and enforces calibrated
+  runs movies800times (non-stream + stream), aishell4_long, and googletime,
+  writes `moss_transcribe_diarize_results.json`,
+  `moss_transcribe_diarize_stream_results.json`,
+  `moss_transcribe_diarize_aishell4_long_results.json`, and
+  `moss_transcribe_diarize_googletime_results.json`, and enforces calibrated
   accuracy/speed thresholds generated from `tune-ci-thresholds`.
 - `test_asr_ci_fun_asr.py`: Fun-ASR-Nano correctness + speed via SGLang Omni
   router (`/v1/audio/transcriptions`). Gates the full 1088-sample English and
@@ -343,6 +348,8 @@ that happened to contain an older version of the test.
   - `ReferenceEncodeService` cache, same-key single-flight, timeout, failure,
     and revalidation semantics.
   - `StageOutputCache` thread safety: concurrent get/put byte-accounting,
+    non-negative capacity validation, identity-checked removal that preserves
+    newer replacements,
     the `remove_if` eviction predicate evaluated outside the lock (re-entrant
     and deadlock-free), and concurrent remove_if/put state integrity.
 - `unit_test/qwen3_asr/`: Qwen3-ASR unit tests:
@@ -353,10 +360,16 @@ that happened to contain an older version of the test.
     text round-trips for byte-level BPE output.
 - `unit_test/fun_asr/`: Fun-ASR-Nano unit tests:
   - pipeline config and stage factory: single `asr` stage, `max_running_requests=32`,
-    auto static KV budget, disabled multimodal embedding cache and torch.compile,
-    and `FunAsrNanoForConditionalGeneration` registry wiring
+    auto static KV budget, pre-LM encoder/cache defaults, scheduler-owned
+    shutdown, disabled multimodal embedding cache and torch.compile, and
+    `FunAsrNanoForConditionalGeneration` registry wiring
+  - pre-LM encoder service: bounded batching, complete-embedding validation,
+    single-flight deduplication, stale cache races, CPU LRU budgets, failure
+    isolation, telemetry, and worker shutdown
+  - model audio-feature shape and checkpoint weight-loading contracts
   - request builder: inclusive audio offset recording, language-prompt prefix
-    construction, and result adapter direct-transcript decoding.
+    construction, encode-after-validation ordering, and result adapter
+    direct-transcript decoding and token telemetry.
 - `unit_test/moss_transcribe_diarize/`: MOSS-Transcribe-Diarize unit tests:
   - pipeline config and stage factory default routing/memory contracts
   - request builder audio-source resolution, single-audio enforcement, audio

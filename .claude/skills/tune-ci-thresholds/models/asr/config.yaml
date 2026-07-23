@@ -1,7 +1,8 @@
 # ASR CI threshold calibration (shared omni venv).
 #
 # CI DAG:
-#   stage-1-multi-speaker (MOSS-Transcribe-Diarize on movies800time + AISHELL4 long)
+#   stage-1-multi-speaker (MOSS-Transcribe-Diarize on movies800time +
+#   AISHELL4 long + googletime)
 #   -> stage-2-seedtts (Fun-ASR-Nano on SeedTTS EN and ZH)
 #
 # All stages use the managed router with 2 single-GPU workers (DP=2).
@@ -16,6 +17,7 @@ hf_model_ids_by_test:
 hf_datasets:
   - "zhaochenyang20/movies800time"
   - "zhaochenyang20/AISHELL4"
+  - "zhaochenyang20/googletime"
   - "zhaochenyang20/seed-tts-eval-arrow"
 omni_ci_home: "/github/home/calibration"
 default_venv_python:
@@ -70,7 +72,7 @@ metric_sources:
       movies800:
         stage_base_override: multi_speaker
         omit_variant_suffix: true
-        constant_filter: "^MOSS_TD_(?!STREAM_|AISHELL4).*"
+        constant_filter: "^MOSS_TD_(?!STREAM_|AISHELL4|GOOGLETIME).*"
         json_file: "test_moss_transcribe_diarize_m0/moss_transcribe_diarize_results.json"
         sample_counts:
           total: "summary.total_samples"
@@ -104,6 +106,29 @@ metric_sources:
         paths:
           cer_percent: "diarization_metrics_percent.cer"
           cer_no_spk_percent: "diarization_metrics_percent.cer_no_spk"
+          cp_cer_percent: "diarization_metrics_percent.cp_cer"
+          delta_cer_percent: "diarization_metrics_percent.delta_cer"
+          speaker_timestamp_der_percent: "diarization_metrics_percent.speaker_timestamp_der"
+          throughput_qps: "speed.throughput_qps"
+          latency_mean_s: "speed.latency_mean_s"
+          latency_p95_s: "speed.latency_p95_s"
+          rtf_mean: "speed.rtf_mean"
+          rtf_p95: "speed.rtf_p95"
+      googletime:
+        stage_base_override: googletime
+        omit_variant_suffix: true
+        constant_filter: "^GOOGLETIME_"
+        context_vars:
+          - MOSS_TD_GOOGLETIME_CI_SAMPLES
+        json_file: "test_moss_transcribe_diarize_m0/moss_transcribe_diarize_googletime_results.json"
+        sample_counts:
+          total: "summary.total_samples"
+          ok: "summary.evaluated"
+        paths:
+          cer_percent: "diarization_metrics_percent.cer"
+          cer_no_spk_percent: "diarization_metrics_percent.cer_no_spk"
+          cer_no_spk_below_50_corpus: "diarization_metrics_percent.cer_no_spk_below_50_corpus"
+          n_above_50_pct_cer: "diarization_metrics_percent.n_above_50_pct_cer"
           cp_cer_percent: "diarization_metrics_percent.cp_cer"
           delta_cer_percent: "diarization_metrics_percent.delta_cer"
           speaker_timestamp_der_percent: "diarization_metrics_percent.speaker_timestamp_der"
