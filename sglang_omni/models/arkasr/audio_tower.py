@@ -19,28 +19,54 @@ from transformers.models.whisper.modeling_whisper import WhisperEncoderLayer
 
 
 class ArkRotaryEmbedding(nn.Module):
-    """RoPE cache generator (matches checkpoint modeling_audio.RotaryEmbedding)."""
+    """RoPE cache generator (matches checkpoint modeling_audio.RotaryEmbedding).
 
-    def __init__(self, dim: int, rope_ratio: int = 1):
+    The table is a pure function of (position, dim), so it is built once at
+    construction and sliced per forward. The checkpoint's reference code rebuilds
+    it on every forward — an arange/outer/cos/sin chain on the critical path
+    whose result never changes — and under ``torch.compile`` that recompute is
+    both extra graph work and a recompile hazard, because the ``arange`` length
+    is the symbolic sequence dimension.
+
+    The table is a non-persistent buffer so it stays out of ``state_dict``
+    (``load_weights`` matches checkpoint names) while still following the module
+    across ``.to(device)`` / ``.to(dtype)``. Building in float32 and letting a
+    later ``.to(bfloat16)`` cast it reproduces the reference exactly, which also
+    computed in float32 and cast at the end.
+    """
+
+    def __init__(self, dim: int, max_position: int, rope_ratio: int = 1):
         super().__init__()
         self.dim = dim
         self.rope_ratio = rope_ratio
+        self.max_position = int(max_position)
+        self.register_buffer(
+            "rope_cache",
+            self._build_table(self.max_position),
+            persistent=False,
+        )
 
     @torch.no_grad()
-    def get_emb(self, seq_len, dtype, device, base: int = 10000):
+    def _build_table(self, seq_len: int, base: int = 10000) -> torch.Tensor:
         base = base * self.rope_ratio
         inv_freq = 1.0 / (
-            base
-            ** (
-                torch.arange(0, self.dim, 2, dtype=torch.float, device=device)
-                / self.dim
-            )
+            base ** (torch.arange(0, self.dim, 2, dtype=torch.float) / self.dim)
         )
-        t = torch.arange(seq_len, device=device, dtype=torch.float)
+        t = torch.arange(int(seq_len), dtype=torch.float)
         freqs = torch.outer(t, inv_freq)  # [seq_len, dim/2]
-        emb = torch.stack(
-            [torch.cos(freqs), torch.sin(freqs)], dim=-1
-        )  # [seq_len, dim/2, 2]
+        return torch.stack([torch.cos(freqs), torch.sin(freqs)], dim=-1)
+
+    @torch.no_grad()
+    def get_emb(self, seq_len, dtype, device):
+        if seq_len > self.rope_cache.shape[0]:
+            raise ValueError(
+                f"ARK-ASR RoPE table holds {self.rope_cache.shape[0]} positions "
+                f"but the audio tower asked for {int(seq_len)}; the mel input is "
+                f"longer than the checkpoint's max_source_positions"
+            )
+        emb = self.rope_cache[:seq_len]
+        if emb.device != device:
+            emb = emb.to(device)
         if dtype in (torch.float16, torch.bfloat16):
             emb = emb.to(dtype)
         return emb
@@ -172,7 +198,12 @@ class ArkAudioTower(nn.Module):
         self.use_rope = bool(getattr(config, "use_rope", True))
         if self.use_rope:
             head_dim = embed_dim // wc.encoder_attention_heads
-            self.rotary_embedding = ArkRotaryEmbedding(head_dim // 2)
+            # conv2 halves the mel frame count, so the post-conv sequence never
+            # exceeds max_source_positions — the same bound embed_positions uses
+            # on the non-RoPE path.
+            self.rotary_embedding = ArkRotaryEmbedding(
+                head_dim // 2, max_position=wc.max_source_positions
+            )
         # checkpoint disables the tower's own final LayerNorm (Identity) and
         # applies a separate LayerNorm in the adapter instead.
         self.layer_norm = nn.Identity()

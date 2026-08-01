@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
 from typing import Any
 
+import torch
 from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from transformers import AutoConfig, AutoTokenizer, WhisperFeatureExtractor
 
@@ -28,6 +31,76 @@ from sglang_omni.scheduling.sglang_backend import (
 )
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
 
+logger = logging.getLogger(__name__)
+
+
+def _compile_arkasr_audio_encoder(
+    model: Any, *, warmup_mel_frames: int = 256, warmup_inference_mode: bool = True
+) -> None:
+    """Compile the Whisper tower and MLP adapter with a symbolic sequence length.
+
+    ARK builds mels with ``padding="longest"``, so the frame count varies per
+    request; ``dynamic=True`` builds one symbolic-shape graph instead of
+    specializing per length, which would recompile until Dynamo's limit silently
+    falls back to eager.
+
+    Only the tower and the ``adapting`` MLP are compiled, not
+    ``ArkAudioMLPAdapter.forward`` as a whole: the adapter's frame-merge step
+    branches on ``seq_len % merge_factor``, and with a symbolic length that guard
+    would specialize the graph per remainder. Those branches are cheap reshapes;
+    the conv frontend, the encoder layers and the projection MLP are the work.
+
+    The bound forwards are compiled rather than wrapping the modules in
+    ``OptimizedModule`` so parameter names stay stable for ``load_weights``. The
+    warmup pays the compile cost at startup instead of on the first request;
+    Dynamo guards on grad mode, so it must run in the same mode as the serving
+    caller — ``torch.inference_mode`` for the pre-LM encoder service, ambient
+    mode for inline prefill on the scheduler loop.
+    """
+    from sglang.srt.compilation.torch_compile_decoration import set_torch_compile_config
+
+    if warmup_mel_frames < 4:
+        # After conv2's stride-2 the downsampled length must still be >= 2:
+        # Dynamo shape-specializes sizes 0 and 1, so a smaller warmup would not
+        # build the symbolic-length graph.
+        raise ValueError(f"warmup_mel_frames must be >= 4, got {warmup_mel_frames}")
+
+    set_torch_compile_config()
+    tower = model.audio_encoder.whisper
+    tower.forward = torch.compile(tower.forward, dynamic=True)
+    model.audio_encoder.adapting.forward = torch.compile(
+        model.audio_encoder.adapting.forward, dynamic=True
+    )
+
+    param = next(model.audio_encoder.parameters())
+    num_mel_bins = int(model.config.whisper_config.num_mel_bins)
+    warmup_ctx = (
+        torch.inference_mode() if warmup_inference_mode else contextlib.nullcontext()
+    )
+    with warmup_ctx:
+        # The tensors must be created inside the context, not merely passed
+        # through it: tensors allocated under inference_mode lack the
+        # ADInplaceOrView dispatch key and Dynamo guards on the key set, so a
+        # normal tensor here would compile a graph the service's inference-mode
+        # tensors fail, forcing a full recompile on the first real request.
+        #
+        # B=1 is today's path (the encoder service encodes per item); B=2 covers
+        # the batched-tower graph so a later batched get_audio_feature does not
+        # recompile at serving time.
+        for batch in (1, 2):
+            mel = torch.zeros(
+                (batch, num_mel_bins, int(warmup_mel_frames)),
+                device=param.device,
+                dtype=param.dtype,
+            )
+            model.audio_encoder(mel)
+    logger.info(
+        "Compiled ARK-ASR audio tower + adapter MLP (dynamic=True, "
+        "warmup_mel_frames=%d, warmup_inference_mode=%s, signatures=B1+B2)",
+        warmup_mel_frames,
+        warmup_inference_mode,
+    )
+
 
 def create_sglang_arkasr_executor(
     model_path: str,
@@ -39,6 +112,7 @@ def create_sglang_arkasr_executor(
     mem_fraction_static: float | None = None,
     mm_embedding_cache_size_bytes: int = 0,
     enable_torch_compile: bool = False,
+    enable_encoder_torch_compile: bool = False,
     mm_attention_backend: str | None = None,
     enable_pre_lm_encoder: bool = True,
     pre_lm_cache_max_entries: int = 4096,
@@ -117,6 +191,12 @@ def create_sglang_arkasr_executor(
 
     if want_cuda_graph:
         model_worker.model_runner.init_cuda_graphs()
+
+    if enable_encoder_torch_compile:
+        _compile_arkasr_audio_encoder(
+            model_worker.model_runner.model,
+            warmup_inference_mode=enable_pre_lm_encoder,
+        )
 
     init_mm_embedding_cache(mm_embedding_cache_size_bytes)
 
