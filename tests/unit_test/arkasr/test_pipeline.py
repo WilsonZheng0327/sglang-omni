@@ -58,8 +58,51 @@ def test_arkasr_config_registered():
 def test_arkasr_stage_defaults():
     signature = inspect.signature(create_sglang_arkasr_executor)
     assert signature.parameters["max_running_requests"].default == 32
-    assert signature.parameters["request_build_max_workers"].default == 2
+    # The pre-LM service encodes inside the request builder, so the builder pool
+    # is what feeds its batcher; 2 workers would cap batches at 2.
+    assert signature.parameters["request_build_max_workers"].default == 8
     assert signature.parameters["request_build_max_pending"].default == 16
+    assert signature.parameters["enable_pre_lm_encoder"].default is True
+    assert signature.parameters["pre_lm_max_batch_size"].default == 8
+    assert signature.parameters["pre_lm_max_batch_wait_ms"].default == 4
+
+
+def test_pipeline_config_resolves_the_pre_lm_serving_defaults():
+    """The factory signature is not what serving uses — the pipeline config's
+    factory_args override it. A pinned request_build_max_workers=2 would cap
+    every pre-LM encode batch at 2 while the signature still advertised 8.
+    """
+    from sglang_omni.config import resolve_stage_factory_args
+
+    config = ArkasrPipelineConfig(model_path="AutoArk-AI/ARK-ASR-3B")
+    stage = next(s for s in config.stages if s.name == "asr")
+    args = resolve_stage_factory_args(stage, config)
+
+    assert args["request_build_max_workers"] == 8
+    # Not pinned off anywhere between the signature and the resolved args.
+    assert args.get("enable_pre_lm_encoder", True) is True
+
+
+def _stub_pre_lm_encoder(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Replace the pre-LM service with a recorder.
+
+    The real service reads ``model.audio_encoder`` and starts a worker thread,
+    neither of which exists behind the factory's stubbed infrastructure.
+    Returns the list of constructor kwargs seen.
+    """
+    constructed: list[dict] = []
+
+    class _StubService:
+        def __init__(self, model, **kwargs):  # noqa: ANN001
+            constructed.append({"model": model, **kwargs})
+            self.closed = 0
+
+        def close(self) -> None:
+            self.closed += 1
+
+    monkeypatch.setattr(stages, "ArkASRPreLMEncoderService", _StubService)
+    monkeypatch.setattr(stages, "build_cache_namespace", lambda *a, **k: "ns")
+    return constructed
 
 
 @pytest.mark.parametrize("want_cuda_graph", [True, False])
@@ -102,7 +145,13 @@ def test_arkasr_factory_triggers_deferred_cuda_graph_capture(
         ),
     )
     monkeypatch.setattr(stages, "build_generation_batch_overrides", lambda **k: {})
-    monkeypatch.setattr(stages, "build_sglang_server_args", lambda *a, **k: object())
+    # The pre-LM service keys its cache on the resolved mm attention backend, so
+    # server_args must expose it.
+    monkeypatch.setattr(
+        stages,
+        "build_sglang_server_args",
+        lambda *a, **k: SimpleNamespace(mm_attention_backend="triton_attn"),
+    )
     monkeypatch.setattr(stages, "validate_generation_batch_policy", lambda **k: None)
     monkeypatch.setattr(
         stages, "create_sglang_infrastructure_defer_cuda_graph", lambda *a, **k: infra
@@ -114,12 +163,114 @@ def test_arkasr_factory_triggers_deferred_cuda_graph_capture(
     )
     monkeypatch.setattr(stages, "ModelRunner", lambda *a, **k: object())
     monkeypatch.setattr(stages, "OmniScheduler", lambda **k: SimpleNamespace())
+    _stub_pre_lm_encoder(monkeypatch)
 
     create_sglang_arkasr_executor(
         "AutoArk-AI/ARK-ASR-3B", mm_attention_backend="triton_attn"
     )
 
     assert calls["init_cuda_graphs"] == (1 if want_cuda_graph else 0)
+
+
+def _run_factory_with_stubs(
+    monkeypatch: pytest.MonkeyPatch, **factory_kwargs
+) -> tuple[list[dict], dict, dict]:
+    """Drive the factory against stubbed infra; return (services, adapter kwargs,
+    scheduler kwargs)."""
+    model_runner = SimpleNamespace(model=object(), init_cuda_graphs=lambda: None)
+    model_worker = SimpleNamespace(model_runner=model_runner)
+    infra = (False, (model_worker, None, None, None, None, None, None))
+
+    monkeypatch.setattr(
+        stages,
+        "AutoTokenizer",
+        SimpleNamespace(from_pretrained=lambda *a, **k: object()),
+    )
+    monkeypatch.setattr(
+        stages,
+        "WhisperFeatureExtractor",
+        SimpleNamespace(
+            from_pretrained=lambda *a, **k: SimpleNamespace(nb_max_frames=3000)
+        ),
+    )
+    monkeypatch.setattr(
+        stages,
+        "AutoConfig",
+        SimpleNamespace(
+            from_pretrained=lambda *a, **k: SimpleNamespace(
+                merge_factor=4, audio_token_id=151663
+            )
+        ),
+    )
+    monkeypatch.setattr(stages, "build_generation_batch_overrides", lambda **k: {})
+    monkeypatch.setattr(
+        stages,
+        "build_sglang_server_args",
+        lambda *a, **k: SimpleNamespace(mm_attention_backend="triton_attn"),
+    )
+    monkeypatch.setattr(stages, "validate_generation_batch_policy", lambda **k: None)
+    monkeypatch.setattr(
+        stages, "create_sglang_infrastructure_defer_cuda_graph", lambda *a, **k: infra
+    )
+    monkeypatch.setattr(stages, "init_mm_embedding_cache", lambda n: None)
+    monkeypatch.setattr(stages, "SGLangOutputProcessor", lambda **k: object())
+    monkeypatch.setattr(stages, "ModelRunner", lambda *a, **k: object())
+
+    adapter_kwargs: dict = {}
+    scheduler_kwargs: dict = {}
+
+    def _capture_adapters(**kwargs):
+        adapter_kwargs.update(kwargs)
+        return object(), object()
+
+    def _capture_scheduler(**kwargs):
+        scheduler_kwargs.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(stages, "make_arkasr_scheduler_adapters", _capture_adapters)
+    monkeypatch.setattr(stages, "OmniScheduler", _capture_scheduler)
+    services = _stub_pre_lm_encoder(monkeypatch)
+
+    create_sglang_arkasr_executor("AutoArk-AI/ARK-ASR-3B", **factory_kwargs)
+    return services, adapter_kwargs, scheduler_kwargs
+
+
+def test_pre_lm_encoder_reaches_request_builder_and_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The service must reach the request builder (which encodes pre-admission)
+    and the scheduler's shutdown_callback (which owns a live worker thread)."""
+    services, adapter_kwargs, scheduler_kwargs = _run_factory_with_stubs(monkeypatch)
+
+    assert len(services) == 1
+    assert services[0]["cache_namespace"] == "ns"
+    assert services[0]["max_batch_size"] == 8
+    assert services[0]["max_batch_wait_ms"] == 4
+    service = adapter_kwargs["audio_encoder_service"]
+    assert service is not None
+    assert scheduler_kwargs["shutdown_callback"] == service.close
+
+
+def test_pre_lm_encoder_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    services, adapter_kwargs, scheduler_kwargs = _run_factory_with_stubs(
+        monkeypatch, enable_pre_lm_encoder=False
+    )
+
+    assert services == []
+    assert adapter_kwargs["audio_encoder_service"] is None
+    assert scheduler_kwargs["shutdown_callback"] is None
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"pre_lm_max_batch_size": 0}, "pre_lm_max_batch_size"),
+        ({"pre_lm_max_batch_wait_ms": -1}, "pre_lm_max_batch_wait_ms"),
+    ],
+)
+def test_pre_lm_encoder_rejects_invalid_batching(kwargs: dict, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        create_sglang_arkasr_executor("AutoArk-AI/ARK-ASR-3B", **kwargs)
 
 
 def test_arkasr_audio_token_count():

@@ -26,7 +26,10 @@ class ArkasrPipelineConfig(PipelineConfig):
                 "device": "cuda:0",
                 "max_running_requests": 32,
                 "max_new_tokens": 256,
-                "request_build_max_workers": 2,
+                # Feeds the pre-LM encoder service's batcher: the service can
+                # only batch what the builder pool hands it concurrently, so a
+                # narrower pool caps every encode batch at its own width.
+                "request_build_max_workers": 8,
                 "request_build_max_pending": 16,
             },
             gpu=0,

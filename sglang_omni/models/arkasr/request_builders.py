@@ -113,6 +113,7 @@ def make_arkasr_scheduler_adapters(
     feature_extractor: Any = None,
     merge_factor: int = 4,
     audio_token_id: int = 151663,
+    audio_encoder_service: Any | None = None,
 ) -> tuple[Callable[[StagePayload], ArkASRRequestData], Callable[[Any], StagePayload]]:
     if feature_extractor is None:
         raise ValueError("ARK-ASR processor is missing a feature_extractor")
@@ -169,7 +170,14 @@ def make_arkasr_scheduler_adapters(
             modality=Modality.AUDIO,
             hash=audio_fingerprint_int(fingerprint),
             feature=features,
-            model_specific_data={"feature_attention_mask": feature_attention_mask},
+            model_specific_data={
+                "feature_attention_mask": feature_attention_mask,
+                # Consumed by the pre-LM encoder service: the fingerprint keys
+                # its CPU LRU, the token count validates the cached embedding's
+                # row count before it is attached to a request.
+                "audio_fingerprint": fingerprint,
+                "num_audio_tokens": num_audio_tokens,
+            },
         )
         # scatter contract (same as qwen3_asr): replace <|audio|> placeholders
         # with the item's pad_value and record the span as inclusive offsets.
@@ -199,6 +207,14 @@ def make_arkasr_scheduler_adapters(
             ),
         )
         sampling_params.normalize(tokenizer=None)
+
+        # Encode ahead of scheduler admission so the tower runs on the service's
+        # worker thread instead of stalling the decode loop during prefill. On
+        # return the item carries a complete precomputed embedding; a failure
+        # here must propagate, since admitting the request without one would
+        # scatter garbage into the <|audio|> placeholder rows.
+        if audio_encoder_service is not None:
+            audio_encoder_service.encode_item(audio_item)
 
         req = Req(
             rid=payload.request_id,

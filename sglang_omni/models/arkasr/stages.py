@@ -9,6 +9,10 @@ from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from transformers import AutoConfig, AutoTokenizer, WhisperFeatureExtractor
 
 from sglang_omni.model_runner.base import ModelRunner
+from sglang_omni.models.arkasr.encoder_service import (
+    ArkASRPreLMEncoderService,
+    build_cache_namespace,
+)
 from sglang_omni.models.arkasr.request_builders import make_arkasr_scheduler_adapters
 from sglang_omni.scheduling.bootstrap import (
     create_sglang_infrastructure_defer_cuda_graph,
@@ -36,10 +40,28 @@ def create_sglang_arkasr_executor(
     mm_embedding_cache_size_bytes: int = 0,
     enable_torch_compile: bool = False,
     mm_attention_backend: str | None = None,
-    request_build_max_workers: int = 2,
+    enable_pre_lm_encoder: bool = True,
+    pre_lm_cache_max_entries: int = 4096,
+    pre_lm_cache_size_bytes: int = 2 * 1024**3,
+    pre_lm_max_batch_size: int = 8,
+    pre_lm_max_batch_wait_ms: int = 4,
+    # The pre-LM service encodes synchronously inside the request builder, so
+    # the builder pool is what feeds it: with only 2 workers the service could
+    # never assemble a batch wider than 2. Matches Fun-ASR's pool for the same
+    # reason.
+    request_build_max_workers: int = 8,
     request_build_max_pending: int | None = 16,
     server_args_overrides: dict[str, Any] | None = None,
 ):
+    if pre_lm_max_batch_size < 1:
+        raise ValueError(
+            f"pre_lm_max_batch_size must be >= 1, got {pre_lm_max_batch_size}"
+        )
+    if pre_lm_max_batch_wait_ms < 0:
+        raise ValueError(
+            f"pre_lm_max_batch_wait_ms must be >= 0, got {pre_lm_max_batch_wait_ms}"
+        )
+
     gpu_id = int(device.split(":")[-1]) if ":" in device else 0
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -103,29 +125,59 @@ def create_sglang_arkasr_executor(
         capture_hidden_layers=None,
         model=model_worker.model_runner.model,
     )
-    request_builder, result_adapter = make_arkasr_scheduler_adapters(
-        tokenizer=tokenizer,
-        feature_extractor=feature_extractor,
-        max_new_tokens=max_new_tokens,
-        merge_factor=merge_factor,
-        audio_token_id=audio_token_id,
-    )
+    audio_encoder_service = None
+    if enable_pre_lm_encoder:
+        model = model_worker.model_runner.model
+        audio_encoder_service = ArkASRPreLMEncoderService(
+            model,
+            cache_namespace=build_cache_namespace(
+                model,
+                model_path=model_path,
+                feature_extractor=feature_extractor,
+                mm_attention_backend=server_args.mm_attention_backend,
+            ),
+            cache_max_entries=pre_lm_cache_max_entries,
+            cache_max_bytes=pre_lm_cache_size_bytes,
+            max_batch_size=pre_lm_max_batch_size,
+            max_batch_wait_ms=pre_lm_max_batch_wait_ms,
+        )
 
-    return OmniScheduler(
-        tp_worker=model_worker,
-        tree_cache=tree_cache,
-        req_to_token_pool=req_to_token_pool,
-        token_to_kv_pool_allocator=token_to_kv_pool_allocator,
-        server_args=server_args,
-        model_config=model_config,
-        prefill_manager=prefill_mgr,
-        decode_manager=decode_mgr,
-        model_runner=ModelRunner(model_worker, output_proc),
-        request_builder=request_builder,
-        result_adapter=result_adapter,
-        request_build_max_workers=request_build_max_workers,
-        request_build_max_pending=request_build_max_pending,
-    )
+    try:
+        request_builder, result_adapter = make_arkasr_scheduler_adapters(
+            tokenizer=tokenizer,
+            feature_extractor=feature_extractor,
+            max_new_tokens=max_new_tokens,
+            merge_factor=merge_factor,
+            audio_token_id=audio_token_id,
+            audio_encoder_service=audio_encoder_service,
+        )
+
+        return OmniScheduler(
+            tp_worker=model_worker,
+            tree_cache=tree_cache,
+            req_to_token_pool=req_to_token_pool,
+            token_to_kv_pool_allocator=token_to_kv_pool_allocator,
+            server_args=server_args,
+            model_config=model_config,
+            prefill_manager=prefill_mgr,
+            decode_manager=decode_mgr,
+            model_runner=ModelRunner(model_worker, output_proc),
+            request_builder=request_builder,
+            result_adapter=result_adapter,
+            request_build_max_workers=request_build_max_workers,
+            request_build_max_pending=request_build_max_pending,
+            shutdown_callback=(
+                audio_encoder_service.close
+                if audio_encoder_service is not None
+                else None
+            ),
+        )
+    except Exception:
+        # The service owns a live worker thread; leaking it would keep the
+        # process alive after a failed startup.
+        if audio_encoder_service is not None:
+            audio_encoder_service.close()
+        raise
 
 
 def create_arkasr_executor(*args, **kwargs):
