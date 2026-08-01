@@ -60,6 +60,9 @@ def test_arkasr_stage_defaults():
     assert signature.parameters["max_running_requests"].default == 32
     assert signature.parameters["request_build_max_workers"].default == 2
     assert signature.parameters["request_build_max_pending"].default == 16
+    # async decode (one-step lookahead) on by default, same as Fun-ASR / MOSS-TD
+    assert signature.parameters["enable_async_decode"].default is True
+    assert signature.parameters["async_decode_min_batch_size"].default == 2
 
 
 @pytest.mark.parametrize("want_cuda_graph", [True, False])
@@ -113,13 +116,22 @@ def test_arkasr_factory_triggers_deferred_cuda_graph_capture(
         stages, "make_arkasr_scheduler_adapters", lambda **k: (object(), object())
     )
     monkeypatch.setattr(stages, "ModelRunner", lambda *a, **k: object())
-    monkeypatch.setattr(stages, "OmniScheduler", lambda **k: SimpleNamespace())
+    scheduler_kwargs: dict = {}
+
+    def _capture_scheduler(**kwargs):
+        scheduler_kwargs.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(stages, "OmniScheduler", _capture_scheduler)
 
     create_sglang_arkasr_executor(
         "AutoArk-AI/ARK-ASR-3B", mm_attention_backend="triton_attn"
     )
 
     assert calls["init_cuda_graphs"] == (1 if want_cuda_graph else 0)
+    # async decode flags must reach the scheduler with their defaults
+    assert scheduler_kwargs["enable_async_decode"] is True
+    assert scheduler_kwargs["async_decode_min_batch_size"] == 2
 
 
 def test_arkasr_audio_token_count():
