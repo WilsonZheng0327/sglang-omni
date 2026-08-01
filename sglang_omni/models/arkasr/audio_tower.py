@@ -181,10 +181,54 @@ class ArkAudioTower(nn.Module):
     def dtype(self) -> torch.dtype:
         return self.conv1.weight.dtype
 
-    def forward(self, input_features: torch.Tensor) -> torch.Tensor:
-        inputs_embeds = F.gelu(self.conv1(input_features))
-        inputs_embeds = F.gelu(self.conv2(inputs_embeds))
-        inputs_embeds = inputs_embeds.permute(0, 2, 1)  # [B, T_down, D]
+    @staticmethod
+    def downsampled_lengths(mel_lengths: torch.Tensor) -> torch.Tensor:
+        """Post-conv frame count per item: conv2's stride-2 halves, rounding up."""
+        return (mel_lengths + 1) // 2
+
+    def forward(
+        self,
+        input_features: torch.Tensor,
+        mel_lengths: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """``mel_lengths`` (B,) gives each item's real mel frame count when the
+        batch is padded to a common width; ``None`` means every frame is real."""
+        hidden = F.gelu(self.conv1(input_features))
+        if mel_lengths is not None:
+            mel_valid = (
+                torch.arange(input_features.shape[-1], device=input_features.device)
+                .unsqueeze(0)
+                .lt(mel_lengths.unsqueeze(1))
+            )  # (B, T)
+            # Zero conv1's output past the clip before conv2 reads it. conv2's
+            # window at the last real downsampled frame reaches one index beyond
+            # the clip; encoding the clip alone leaves implicit zeros there,
+            # whereas conv1's bias makes the padded region non-zero. Without this
+            # the boundary frame differs from the solo result, and since it is a
+            # legal attention key it contaminates the frames that are kept.
+            hidden = hidden * mel_valid.unsqueeze(1).to(hidden.dtype)
+        hidden = F.gelu(self.conv2(hidden))
+        inputs_embeds = hidden.permute(0, 2, 1)  # [B, T_down, D]
+
+        attention_mask = None
+        if mel_lengths is not None:
+            frames = inputs_embeds.shape[1]
+            valid = (
+                torch.arange(frames, device=inputs_embeds.device)
+                .unsqueeze(0)
+                .lt(self.downsampled_lengths(mel_lengths).unsqueeze(1))
+            )  # (B, T_down)
+            # Additive mask over keys, broadcast across heads and queries. Query
+            # rows inside the padded region still see the real keys, so no row is
+            # fully masked and SDPA cannot produce NaN.
+            attention_mask = torch.zeros(
+                (inputs_embeds.shape[0], 1, 1, frames),
+                dtype=inputs_embeds.dtype,
+                device=inputs_embeds.device,
+            ).masked_fill_(
+                ~valid.unsqueeze(1).unsqueeze(1), torch.finfo(inputs_embeds.dtype).min
+            )
+
         if self.use_rope:
             rope = self.rotary_embedding.get_emb(
                 inputs_embeds.shape[1], inputs_embeds.dtype, inputs_embeds.device
@@ -196,7 +240,9 @@ class ArkAudioTower(nn.Module):
                 inputs_embeds + self.embed_positions.weight[: inputs_embeds.shape[1]]
             )
         for layer in self.layers:
-            hidden_states = layer(hidden_states, rotary_pos_emb=rope)[0]
+            hidden_states = layer(
+                hidden_states, attention_mask=attention_mask, rotary_pos_emb=rope
+            )[0]
         return self.layer_norm(hidden_states)
 
 
@@ -223,10 +269,33 @@ class ArkAudioMLPAdapter(nn.Module):
     def dtype(self) -> torch.dtype:
         return self.whisper.dtype
 
-    def forward(self, audios: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        audios: torch.Tensor,
+        mel_lengths: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """``mel_lengths`` (B,) marks each item's real mel frames when the batch
+        is padded to a common width; ``None`` means every frame is real."""
         bsz = audios.size(0)
-        encoded = self.whisper(audios)  # (B, T, D)
+        if mel_lengths is not None:
+            mel_lengths = mel_lengths.to(audios.device)
+        encoded = self.whisper(audios, mel_lengths)  # (B, T, D)
         encoded = self.layer_norm(encoded)
+        valid = None
+        if mel_lengths is not None:
+            down = self.whisper.downsampled_lengths(mel_lengths)
+            valid = (
+                torch.arange(encoded.shape[1], device=encoded.device)
+                .unsqueeze(0)
+                .lt(down.unsqueeze(1))
+            )
+        if valid is not None:
+            # Zero the padded frames before the merge. Encoder bias terms make
+            # padded positions non-zero, and the short-clip branch below pads
+            # with zeros to reach one merge group — without this, a clip shorter
+            # than merge_factor would merge encoder noise instead of zeros and
+            # diverge from the same clip encoded on its own.
+            encoded = encoded * valid.unsqueeze(-1).to(encoded.dtype)
         seq_len = encoded.size(1)
         if seq_len % self.merge_factor != 0:
             target_len = (seq_len // self.merge_factor) * self.merge_factor

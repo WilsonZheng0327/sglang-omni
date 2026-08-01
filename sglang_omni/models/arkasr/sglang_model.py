@@ -25,6 +25,7 @@ from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 from sglang.srt.utils import add_prefix
 
+from .audio_lengths import arkasr_num_audio_tokens
 from .audio_tower import ArkAudioMLPAdapter
 from .configuration_arkasr import ArkasrConfig
 
@@ -55,21 +56,59 @@ class ArkasrForConditionalGeneration(nn.Module):
         return self.pattern.pad_input_tokens(input_ids, mm_inputs)
 
     def get_audio_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
-        """Encode each request's mel features to LLM-space audio embeddings.
+        """Encode a batch of requests' mel features to LLM-space embeddings.
 
-        Each item.feature is (num_mel_bins, T) or (1, num_mel_bins, T). We run
-        the tower per item (variable T) and concatenate along the token axis so
-        the flat sequence lines up with the scattered <|audio|> positions.
+        Each item.feature is (num_mel_bins, T) or (1, num_mel_bins, T) with a
+        per-request T. SGLang hands every cache miss in a forward batch to one
+        call, so mixed-length mels are padded to the batch max and encoded in a
+        single tower pass, with the padding masked out of attention and zeroed
+        before the frame merge. Each item's rows are then trimmed back to its own
+        token count and concatenated, so the flat sequence lines up with the
+        scattered <|audio|> positions exactly as the per-item loop did.
+
+        Zero padding is what makes the batched result match: conv1/conv2 pad with
+        zeros implicitly, so a zero-padded frame at the boundary contributes the
+        same value it would have when the clip was encoded alone.
         """
         device = next(self.audio_encoder.parameters()).device
         dtype = self.audio_encoder.dtype
-        outs = []
+        merge_factor = int(self.audio_encoder.merge_factor)
+
+        features: list[torch.Tensor] = []
+        mel_lengths: list[int] = []
         for item in items:
-            feat = item.feature.to(device=device, dtype=dtype)
+            feat = item.feature
             if feat.dim() == 2:
                 feat = feat.unsqueeze(0)  # (1, mel, T)
-            emb = self.audio_encoder(feat)  # (1, Sa, H)
-            outs.append(emb.reshape(-1, emb.size(-1)))
+            features.append(feat.to(device=device, dtype=dtype))
+
+            # The request builder already ships this; it is the same count it
+            # derived num_audio_tokens from, so the scatter contract holds.
+            mask = getattr(item, "feature_attention_mask", None)
+            if mask is None:
+                mel_lengths.append(int(feat.shape[-1]))
+                continue
+            if int(mask.shape[-1]) != int(feat.shape[-1]):
+                raise ValueError(
+                    f"ARK-ASR feature_attention_mask width {int(mask.shape[-1])} "
+                    f"does not match the item's {int(feat.shape[-1])} mel frames"
+                )
+            mel_lengths.append(int(mask.sum().item()))
+
+        max_frames = max(feature.shape[-1] for feature in features)
+        if any(feature.shape[-1] != max_frames for feature in features):
+            features = [
+                nn.functional.pad(feature, (0, max_frames - feature.shape[-1]))
+                for feature in features
+            ]
+        batch = torch.cat(features, dim=0)
+        lengths = torch.tensor(mel_lengths, dtype=torch.long, device=device)
+
+        embeddings = self.audio_encoder(batch, mel_lengths=lengths)  # (B, S, H)
+        outs = [
+            embeddings[index, : arkasr_num_audio_tokens(length, merge_factor)]
+            for index, length in enumerate(mel_lengths)
+        ]
         return torch.cat(outs, dim=0)
 
     def forward(
