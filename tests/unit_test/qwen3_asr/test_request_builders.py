@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-import sglang_omni.models.qwen3_asr.request_builders as request_builders
+import sglang_omni.preprocessing.transcription as transcription
 from sglang_omni.models.qwen3_asr.audio_lengths import (
     qwen3_asr_audio_token_lengths,
     qwen3_asr_num_audio_tokens,
@@ -91,9 +91,9 @@ def test_qwen3_asr_request_builder_records_inclusive_audio_offsets(monkeypatch) 
         attention_mask=torch.ones((1, num_mel_frames), dtype=torch.long),
     )
     monkeypatch.setattr(
-        request_builders,
-        "_load_audio",
-        lambda source: np.zeros(1600, dtype=np.float32),
+        transcription,
+        "load_audio",
+        lambda source, **kwargs: np.zeros(1600, dtype=np.float32),
     )
     request_builder, _ = make_qwen3_asr_scheduler_adapters(
         tokenizer=_FakeTokenizer(),
