@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared audio preparation for ASR request builders.
 
-Resolves the audio source from the ``StagePayload``, decodes/resamples it to 
+Resolves the audio source from the ``StagePayload``, decodes/resamples it to
 the model's sample rate, then derives the clip duration and cache fingerprint.
 
 Low-level mechanics (decode, load, resample, fingerprint) stay in
-``sglang_omni.utils.audio``. 
+``sglang_omni.utils.audio``.
 
-Model-specific: ``source_name`` used in error messages, duration limit where 
+Model-specific: ``source_name`` used in error messages, duration limit where
 the model has one, and the custom ``source_resolver`` when the model accepts
 sources beyond the default payload keys (e.g. MOSS-Transcribe-Diarize).
 """
@@ -71,7 +71,7 @@ def prepare_audio(
     max_duration_message: str | None = None,
 ) -> PreparedAudio:
     """Resolve, load, and fingerprint the payload's audio for one request."""
-    
+
     source = source_resolver(payload)
     waveform = load_audio(
         source,

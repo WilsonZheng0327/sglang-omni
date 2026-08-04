@@ -132,9 +132,11 @@ def test_qwen3_asr_request_builder_preserves_audio_beyond_30_seconds(
         n_fft=400,
     )
     monkeypatch.setattr(
-        request_builders,
-        "_load_audio",
-        lambda source: np.zeros(sample_rate * audio_duration_s, dtype=np.float32),
+        transcription,
+        "load_audio",
+        lambda source, **kwargs: np.zeros(
+            sample_rate * audio_duration_s, dtype=np.float32
+        ),
     )
     request_builder, _ = make_qwen3_asr_scheduler_adapters(
         tokenizer=_FakeTokenizer(),

@@ -140,10 +140,7 @@ def test_fun_asr_request_builder_records_inclusive_audio_offsets(monkeypatch) ->
 
 def test_fun_asr_request_builder_encodes_after_offsets_are_final(monkeypatch) -> None:
     audio = np.zeros(1600, dtype=np.float32)
-    monkeypatch.setattr(
-        transcription,
-        "load_audio",
-        lambda source, **kwargs: audio)
+    monkeypatch.setattr(transcription, "load_audio", lambda source, **kwargs: audio)
     observed: dict[str, object] = {}
 
     class _EncoderService:
