@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="_static/documentation_options.js?v=a1637f0b"></script>
+    <script src="_static/documentation_options.js?v=0deb7d70"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
@@ -51,15 +51,15 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'README';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="_static/js/qwen3_omni_server_generator.js?v=94f3a115"></script>
+    <script src="_static/js/qwen3_omni_server_generator.js?v=66f6ff63"></script>
     <script src="_static/js/ming_omni_server_generator.js?v=694b1473"></script>
     <link rel="icon" href="_static/logo.ico"/>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.0" />
-    <meta name="docbuild:last-update" content="Aug 03, 2026"/>
+  <meta name="docsearch:version" content="0.1.2" />
+    <meta name="docbuild:last-update" content="Aug 17, 2026"/>
   
     
     <script src="_static/searchtools.js"></script>
@@ -207,6 +207,8 @@
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="get_started/installation.html">🚀 Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started/installation_xpu.html">🚀 Installation — Intel XPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started/release_notes.html">Release Notes</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="nav bd-sidenav">
@@ -217,6 +219,8 @@
 <li class="toctree-l1"><a class="reference internal" href="cookbook/ming_tts.html">Ming-Omni-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="cookbook/moss_tts.html">MOSS-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="cookbook/moss_tts_local.html">MOSS-TTS-Local</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cookbook/dots_tts.html">dots.tts</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cookbook/minimax_music3.html">MiniMax Music 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="cookbook/zonos2.html">ZONOS2</a></li>
 <li class="toctree-l1"><a class="reference internal" href="cookbook/qwen3_asr.html">Qwen3-ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="cookbook/fun_asr.html">Fun-ASR-Nano</a></li>
@@ -230,6 +234,7 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">General Usage</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="basic_usage/qwen3_omni.html">Omni Model Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="basic_usage/audio_translations.html">Audio Translations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="basic_usage/tts.html">TTS Model Usage</a></li>
 <li class="toctree-l1"><a class="reference internal" href="basic_usage/tts_process_topology.html">TTS Process Topology</a></li>
 <li class="toctree-l1"><a class="reference internal" href="basic_usage/omni_router.html">Omni Router Usage</a></li>
@@ -248,6 +253,7 @@
 <li class="toctree-l1"><a class="reference internal" href="developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer_reference/profiler.html">Request-level profiler</a></li>
+<li class="toctree-l1"><a class="reference internal" href="developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer_reference/rl_admin_control.html">RL Admin Control</a></li>
 </ul>
 
@@ -487,7 +493,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#update-documentation">Update Documentation</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-style-guidelines">Documentation Style Guidelines</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#style">Style</a></li>
 </ul>
             </nav>
         </div>
@@ -501,8 +507,7 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="sglang-omni-documentation">
 <h1>SGLang-Omni Documentation<a class="headerlink" href="#sglang-omni-documentation" title="Link to this heading">#</a></h1>
-<p>We recommend new contributors to start from writing documentation, which helps you quickly understand the SGLang-Omni codebase.
-Most documentation files are located under the <code class="docutils literal notranslate"><span class="pre">docs/</span></code> folder.</p>
+<p>Most docs live under <code class="docutils literal notranslate"><span class="pre">docs/</span></code> as Markdown cookbooks and guides. Start there if you are new to the codebase.</p>
 <section id="docs-workflow">
 <h2>Docs Workflow<a class="headerlink" href="#docs-workflow" title="Link to this heading">#</a></h2>
 <section id="install-dependency">
@@ -514,31 +519,25 @@ pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </s
 </section>
 <section id="update-documentation">
 <h3>Update Documentation<a class="headerlink" href="#update-documentation" title="Link to this heading">#</a></h3>
-<p>Update your Jupyter notebooks in the appropriate subdirectories under <code class="docutils literal notranslate"><span class="pre">docs/</span></code>. If you add new files, remember to update <code class="docutils literal notranslate"><span class="pre">index.rst</span></code> (or relevant <code class="docutils literal notranslate"><span class="pre">.rst</span></code> files) accordingly.</p>
+<p>Edit the Markdown (or RST) under <code class="docutils literal notranslate"><span class="pre">docs/</span></code>. New pages must be listed in <code class="docutils literal notranslate"><span class="pre">index.rst</span></code> (or the relevant toctree).</p>
 <ul class="simple">
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">pre-commit</span> <span class="pre">run</span> <span class="pre">--all-files</span></code></strong> manually runs all configured checks, applying fixes if possible. If it fails the first time, re-run it to ensure lint errors are fully resolved. Make sure your code passes all checks <strong>before</strong> creating a Pull Request.</p></li>
+<li><p>Run <code class="docutils literal notranslate"><span class="pre">pre-commit</span> <span class="pre">run</span> <span class="pre">--all-files</span></code> before opening a PR. Re-run once if the first pass auto-fixes files.</p></li>
+<li><p>Preview locally:</p></li>
 </ul>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>serve.sh
 
-<span class="c1"># if you want to use a custom port</span>
+<span class="c1"># custom port</span>
 <span class="nv">PORT</span><span class="o">=</span><span class="m">8080</span><span class="w"> </span>make<span class="w"> </span>serve
 </pre></div>
 </div>
 </section>
 </section>
-<hr class="docutils" />
-<section id="documentation-style-guidelines">
-<h2>Documentation Style Guidelines<a class="headerlink" href="#documentation-style-guidelines" title="Link to this heading">#</a></h2>
+<section id="style">
+<h2>Style<a class="headerlink" href="#style" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>For common functionalities, we prefer <strong>Jupyter Notebooks</strong> over Markdown so that all examples can be executed and validated by our docs CI pipeline. For complex features (e.g., distributed serving), Markdown is preferred.</p></li>
-<li><p>Keep in mind the documentation execution time when writing interactive Jupyter notebooks. Each interactive notebook will be run and compiled against every commit to ensure they are runnable, so it is important to apply some tips to reduce the documentation compilation time:</p>
-<ul>
-<li><p>Use small models (e.g., <code class="docutils literal notranslate"><span class="pre">qwen/qwen2.5-0.5b-instruct</span></code>) for most cases to reduce server launch time.</p></li>
-<li><p>Reuse the launched server as much as possible to reduce server launch time.</p></li>
-</ul>
-</li>
-<li><p>Do not use absolute links (e.g., <code class="docutils literal notranslate"><span class="pre">https://docs.sglang-omni.ai/get_started/install.html</span></code>). Always prefer relative links (e.g., <code class="docutils literal notranslate"><span class="pre">../get_started/install.md</span></code>).</p></li>
-<li><p>Follow the existing examples to learn how to launch a server, send a query and other common styles.</p></li>
+<li><p>Prefer <strong>Markdown</strong> for cookbooks and usage guides. Use notebooks only when the example must be executed in docs CI.</p></li>
+<li><p>Prefer relative links (<code class="docutils literal notranslate"><span class="pre">../get_started/installation.md</span></code>), not absolute docs URLs.</p></li>
+<li><p>Match existing launch / request examples in neighboring cookbooks.</p></li>
 </ul>
 </section>
 </section>
@@ -577,7 +576,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </s
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#update-documentation">Update Documentation</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-style-guidelines">Documentation Style Guidelines</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#style">Style</a></li>
 </ul>
   </nav></div>
 
@@ -611,7 +610,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 03, 2026.
+  Last updated on Aug 17, 2026.
   <br/>
 </p>
   </div>
