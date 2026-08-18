@@ -74,6 +74,19 @@ def test_arkasr_stage_defaults():
     assert signature.parameters["pre_lm_max_batch_size"].default == 8
     assert signature.parameters["pre_lm_max_batch_wait_ms"].default == 0
     assert signature.parameters["pre_lm_max_pending"].default == 32
+    assert signature.parameters["enable_encoder_torch_compile"].default is False
+
+
+def test_arkasr_encoder_torch_compile_is_opt_in():
+    """A-PR5 ships off: enabling it needs GPU accuracy and throughput numbers."""
+    config = ArkasrPipelineConfig(model_path="AutoArk-AI/ARK-ASR-3B")
+
+    assert config.stages[0].factory_args["enable_encoder_torch_compile"] is False
+    # It must still be reachable without touching the generic LM compile arg.
+    signature = inspect.signature(arkasr_builder.ArkasrEngineBuilder.__init__)
+    parameter = signature.parameters["enable_encoder_torch_compile"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is False
 
 
 def test_arkasr_pre_lm_group_matches_one_encoder_microbatch_by_default():

@@ -9,6 +9,7 @@ from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from transformers import AutoConfig, AutoTokenizer, WhisperFeatureExtractor
 
 from sglang_omni.models.arkasr import request_builders
+from sglang_omni.models.arkasr.encoder_compile import compile_arkasr_audio_encoder
 from sglang_omni.models.arkasr.encoder_service import (
     ArkasrPreLMEncoderService,
     build_cache_namespace,
@@ -32,6 +33,7 @@ class ArkasrEngineBuilder(AsrEngineBuilder):
         mem_fraction_static: float | None,
         mm_embedding_cache_size_bytes: int,
         enable_torch_compile: bool,
+        enable_encoder_torch_compile: bool = False,
         mm_attention_backend: str | None,
         request_build_max_workers: int,
         request_build_max_pending: int | None,
@@ -62,6 +64,7 @@ class ArkasrEngineBuilder(AsrEngineBuilder):
         self.mem_fraction_static = mem_fraction_static
         self.mm_embedding_cache_size_bytes = mm_embedding_cache_size_bytes
         self.enable_torch_compile = enable_torch_compile
+        self.enable_encoder_torch_compile = enable_encoder_torch_compile
         self.mm_attention_backend = mm_attention_backend
         self.request_build_max_workers = request_build_max_workers
         self.request_build_max_pending = request_build_max_pending
@@ -123,6 +126,11 @@ class ArkasrEngineBuilder(AsrEngineBuilder):
         del generation_cuda_graph_enabled
         model.set_encoder_max_batch_size(self.encoder_max_batch_size)
         init_mm_embedding_cache(self.mm_embedding_cache_size_bytes)
+        if self.enable_encoder_torch_compile:
+            compile_arkasr_audio_encoder(
+                model,
+                warmup_inference_mode=self.enable_pre_lm_encoder,
+            )
         if self.enable_pre_lm_encoder:
             # Note (Akazaakane): Constructed after generation CUDA graphs so the
             # encoder's dedicated stream never interleaves with graph capture.
