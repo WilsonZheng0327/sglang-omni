@@ -209,6 +209,57 @@ not change peak encoder activation memory.
 construction; encoder concurrency and backpressure are owned by the separate
 pre-LM queue.
 
+## Encoder `torch.compile`
+
+The generic `enable_torch_compile` server arg only reaches the LM. Because the
+pre-LM encoder runs the audio tower as an isolated stage on its own thread and
+CUDA stream, that stage can be compiled independently:
+
+| knob | default | meaning |
+|---|---|---|
+| `enable_encoder_torch_compile` | `false` | Compile the Whisper tower and the adapter MLP with dynamic shapes. |
+
+Enable it by overriding the pipeline configuration:
+
+```yaml
+config_cls: ArkasrPipelineConfig
+name: arkasr
+model_path: AutoArk-AI/ARK-ASR-3B
+
+runtime_overrides:
+  asr:
+    enable_encoder_torch_compile: true
+```
+
+Mels are built with `padding="longest"`, so the frame count varies per request.
+The compile uses `dynamic=True` to build one symbolic-shape graph rather than
+specializing per length — a static compile would recompile on every new length
+until Dynamo's recompile limit silently falls back to eager.
+
+Two modules are compiled, and one is deliberately not:
+
+- `ArkAudioTower` (conv front-end + RoPE encoder layers) and the `adapting`
+  projection MLP are compiled.
+- `ArkAudioMLPAdapter.forward` stays eager. Its frame-merge step branches on
+  `seq_len % merge_factor` and on the trimmed length, which under a symbolic
+  length only adds guards that specialize the graph; both arms are a slice and
+  a reshape, while the convolutions, encoder layers and projection MLP are the
+  actual work.
+
+The bound `forward`s are compiled rather than wrapping the modules in
+`OptimizedModule`, so parameter names stay stable — `load_weights` matches
+checkpoint names against `named_parameters` and would miss every audio weight
+behind an `_orig_mod.` prefix.
+
+Startup runs a warmup so the compile cost is not paid on the first request. It
+covers both signatures `get_audio_feature` emits (a single item encodes with
+`attention_mask=None`; a group of two or more encodes with a ragged mask), and
+allocates its tensors under the same grad mode as the serving caller —
+`torch.inference_mode` when `enable_pre_lm_encoder` is on, ambient mode when the
+encoder runs inline on the scheduler loop. Dynamo guards on the input's dispatch
+key set, so a warmup tensor allocated in the wrong mode would compile a graph
+that real requests fail, forcing a full recompile.
+
 ## Benchmarking
 
 Use `benchmarks/eval/benchmark_asr_seedtts.py` to sweep ASR concurrency on

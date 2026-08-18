@@ -73,10 +73,10 @@ def test_table_is_not_persisted_in_state_dict() -> None:
     key the checkpoint does not ship."""
     rope = ArkRotaryEmbedding(_DIM, max_position=_MAX_POSITION)
 
+    tower_state = ArkAudioTower(_tiny_config()).state_dict()
+
     assert "rope_cache" not in rope.state_dict()
-    assert "rotary_embedding.rope_cache" not in ArkAudioTower(
-        _tiny_config()
-    ).state_dict()
+    assert "rotary_embedding.rope_cache" not in tower_state
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -119,11 +119,13 @@ def test_tower_forward_is_unchanged_by_the_cache() -> None:
 
     head_dim = cfg.whisper_config.d_model // cfg.whisper_config.encoder_attention_heads
     recomputed = _reference_emb(head_dim // 2, 20)
+
+    def _recomputed_emb(seq_len, dtype, device):
+        return recomputed[:seq_len]
+
     original_get_emb = tower.rotary_embedding.get_emb
     try:
-        tower.rotary_embedding.get_emb = (
-            lambda seq_len, dtype, device: recomputed[:seq_len]
-        )
+        tower.rotary_embedding.get_emb = _recomputed_emb
         with torch.no_grad():
             reference = tower(mel)
     finally:
