@@ -34,7 +34,7 @@ def test_fun_asr_config_uses_batched_stage_with_64_running_requests() -> None:
     assert config.stages[0].factory_args["pre_lm_cache_max_entries"] == 4096
     assert config.stages[0].factory_args["pre_lm_cache_size_bytes"] == 2 * 1024**3
     assert config.stages[0].factory_args["pre_lm_max_batch_size"] == 8
-    assert config.stages[0].factory_args["pre_lm_max_batch_wait_ms"] == 4
+    assert config.stages[0].factory_args["pre_lm_max_batch_wait_ms"] == 10
     assert config.stages[0].factory_args["request_build_max_workers"] == 8
     assert config.stages[0].factory_args["request_build_max_pending"] == 32
     assert (
