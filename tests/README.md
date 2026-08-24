@@ -505,10 +505,13 @@ that happened to contain an older version of the test.
   - audio-token count formula, audio-tower forward shape, marker-token
     suppression, and the fp16 encoder residual clamp.
 - `unit_test/fun_asr/`: Fun-ASR-Nano unit tests:
-  - pipeline config and stage factory: single `asr` stage, `max_running_requests=32`,
+  - pipeline config and stage factory: single `asr` stage, `max_running_requests=64`,
     auto static KV budget, pre-LM encoder/cache defaults, scheduler-owned
     shutdown, disabled multimodal embedding cache and torch.compile, and
     `FunAsrNanoForConditionalGeneration` registry wiring
+  - pending-build-aware prefill coalescing: pipeline config and stage factory
+    defaults agree on coalesce batch size, wait window, idle admission, and
+    the pending-build and decode-phase gates
   - pre-LM encoder service: bounded batching, complete-embedding validation,
     single-flight deduplication, stale cache races, CPU LRU budgets, failure
     isolation, stream-synchronized state commits, request-scoped OOM recovery,
@@ -767,7 +770,8 @@ that happened to contain an older version of the test.
   state layouts, server-argument publication, and version-dependent call
   signatures.
 
-- `unit_test/whisper_asr/`: Whisper pipeline configuration, encoder CUDA Graph
+- `unit_test/whisper_asr/`: Whisper pipeline configuration, encoder CUDA Graph,
+  decoder LayerNorm fast-path placement, and PyTorch fallback behavior
   policy, pre-LM encoder batching and caching, prompt budgeting, concurrent
   tokenizer access, and request construction. These tests use fakes and run on
   CPU despite validating CUDA Graph policy.
