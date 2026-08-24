@@ -64,7 +64,7 @@ def test_fun_asr_stage_default_allows_64_running_requests() -> None:
     assert signature.parameters["pre_lm_cache_max_entries"].default == 4096
     assert signature.parameters["pre_lm_cache_size_bytes"].default == 2 * 1024**3
     assert signature.parameters["pre_lm_max_batch_size"].default == 8
-    assert signature.parameters["pre_lm_max_batch_wait_ms"].default == 4
+    assert signature.parameters["pre_lm_max_batch_wait_ms"].default == 10
     assert signature.parameters["request_build_max_workers"].default == 8
     assert signature.parameters["request_build_max_pending"].default == 32
     assert signature.parameters["stream_emit_interval_s"].default == 0.05

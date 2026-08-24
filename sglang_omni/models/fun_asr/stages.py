@@ -114,7 +114,7 @@ def create_sglang_fun_asr_executor(
     pre_lm_cache_max_entries: int = 4096,
     pre_lm_cache_size_bytes: int = 2 * 1024**3,
     pre_lm_max_batch_size: int = 8,
-    pre_lm_max_batch_wait_ms: int = 4,
+    pre_lm_max_batch_wait_ms: int = 10,
     request_build_max_workers: int = 8,
     request_build_max_pending: int | None = 32,
     stream_emit_interval_s: float = 0.05,
