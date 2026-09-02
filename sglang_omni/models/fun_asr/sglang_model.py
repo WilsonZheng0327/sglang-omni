@@ -177,7 +177,9 @@ class EncoderLayerSANM(nn.Module):
         self.final_layer_norm = nn.LayerNorm(size, eps=1e-5)
         self.fc1 = nn.Linear(size, linear_units)
         self.fc2 = nn.Linear(linear_units, size)
-        self.fsmn = FunAsrNanoFSMN(size, kernel_size, attention_dropout_rate)
+        self.feedforward_sequential_memory = FunAsrNanoFSMN(
+            size, kernel_size, attention_dropout_rate
+        )
         self.dropout = nn.Dropout(dropout_rate)
         self.activation_dropout = nn.Dropout(activation_dropout_rate)
         self.activation = ACT2FN[activation_function]
@@ -191,7 +193,9 @@ class EncoderLayerSANM(nn.Module):
         x = self.self_attn_layer_norm(x)
         # note (guozhihao): attn returns v so FSMN does not recompute v_proj.
         attn_out, value_states = self.self_attn(x, mask)
-        x = self.dropout(attn_out + self.fsmn(value_states, mask))
+        x = self.dropout(
+            attn_out + self.feedforward_sequential_memory(value_states, mask)
+        )
         x = _apply_time_mask(x, mask)
         if self.in_size == self.size:
             x = residual + x
@@ -569,6 +573,10 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
                 strict_multimodal = True
             elif name.startswith("model.multi_modal_projector."):
                 name = name.replace("model.", "", 1)
+                is_llm = False
+                strict_multimodal = True
+            elif name.startswith("model.audio_adaptor."):
+                name = name.replace("model.audio_adaptor.", "multi_modal_projector.", 1)
                 is_llm = False
                 strict_multimodal = True
             elif name.startswith("model.language_model."):

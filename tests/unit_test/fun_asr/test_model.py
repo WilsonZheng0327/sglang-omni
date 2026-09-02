@@ -38,7 +38,7 @@ def test_fun_asr_audio_modules_match_current_checkpoint_parameter_names() -> Non
     assert "stem.self_attn.k_proj.weight" in encoder_names
     assert "stem.self_attn.v_proj.weight" in encoder_names
     assert "stem.self_attn.out_proj.weight" in encoder_names
-    assert "stem.fsmn.conv.weight" in encoder_names
+    assert "stem.feedforward_sequential_memory.conv.weight" in encoder_names
     assert "stem.fc1.weight" in encoder_names
     assert "layers.0.self_attn_layer_norm.weight" in encoder_names
     assert "layers.0.final_layer_norm.weight" in encoder_names
@@ -92,6 +92,44 @@ def test_fun_asr_weight_loader_rejects_unknown_audio_weights() -> None:
 
     with pytest.raises(ValueError, match=r"model\.audio_tower\.missing\.weight"):
         model.load_weights([("model.audio_tower.missing.weight", torch.ones(2))])
+
+
+def test_fun_asr_weight_loader_accepts_checkpoint_format_audio_modules() -> None:
+    model = _weight_loader_target()
+    model.audio_tower = FunAsrNanoAudioEncoder(
+        input_size=8,
+        output_size=8,
+        attention_heads=2,
+        linear_units=16,
+        num_blocks=2,
+        tp_blocks=1,
+        kernel_size=3,
+    )
+    model.multi_modal_projector = FunAsrNanoAdaptor(
+        encoder_dim=8,
+        llm_dim=8,
+        ffn_dim=16,
+        num_layers=1,
+        attention_heads=2,
+    )
+
+    checkpoint = [
+        ("model.audio_tower." + name, torch.full_like(param, 2.0))
+        for name, param in model.audio_tower.named_parameters()
+    ]
+    for name, param in model.multi_modal_projector.named_parameters():
+        prefix = (
+            "model.audio_adaptor."
+            if name.startswith("blocks.")
+            else "model.multi_modal_projector."
+        )
+        checkpoint.append((prefix + name, torch.full_like(param, 2.0)))
+
+    model.load_weights(checkpoint)
+
+    for module in (model.audio_tower, model.multi_modal_projector):
+        for name, param in module.named_parameters():
+            assert torch.equal(param, torch.full_like(param, 2.0)), name
 
 
 def test_fun_asr_audio_feature_shape() -> None:
