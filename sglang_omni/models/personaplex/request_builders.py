@@ -12,10 +12,12 @@ from sglang_omni.models.personaplex.architecture import (
     DEFAULT_AUDIO_TOP_K,
     DEFAULT_TEXT_TEMPERATURE,
     DEFAULT_TEXT_TOP_K,
+    SAMPLE_RATE,
+    SAMPLES_PER_FRAME,
     TEXT_CARD,
     TEXT_PAD_ID,
 )
-from sglang_omni.models.personaplex.config import CODE2WAV_STAGE
+from sglang_omni.models.personaplex.config import CODE2WAV_STAGE, LM_STAGE
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.sampling import AudioSampling
 from sglang_omni.models.personaplex.timeline import (
@@ -23,12 +25,15 @@ from sglang_omni.models.personaplex.timeline import (
     build_prompt_frames,
     build_timeline,
 )
-from sglang_omni.proto import StagePayload
+from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
 from sglang_omni.sampling.seed import derive_sampling_seed
 from sglang_omni.scheduling.messages import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
 
 SEED_NAMESPACE = "personaplex"
+# Note (wilsonzheng0327): The client fills these into every request, so a value equal
+# to one of them only counts when the caller listed the field as explicit.
+_CLIENT_FILLER_VALUES = {"temperature": 1.0, "top_k": -1}
 
 
 @dataclass(frozen=True)
@@ -55,37 +60,60 @@ class RequestSampling:
         )
 
 
-def _float_param(params: dict, key: str, default: float) -> float:
+def stage_request_params(params: dict, stage: str) -> dict:
+    """Request params with ``stage_params[stage]`` layered on top.
+
+    The in-process client can set PersonaPlex options at the top level; an HTTP
+    request reaches them only through ``stage_params``.
+    """
+    stage_params = params.get("stage_params")
+    overrides = stage_params.get(stage) if isinstance(stage_params, dict) else None
+    return {**params, **overrides} if isinstance(overrides, dict) else dict(params)
+
+
+def _param(params: dict, key: str, default, cast):
     value = params.get(key)
-    return default if value is None else float(value)
+    return default if value is None else cast(value)
 
 
-def _int_param(params: dict, key: str, default: int) -> int:
-    value = params.get(key)
-    return default if value is None else int(value)
+def _text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
+    """The first value a caller actually chose, from ``(params, explicit)`` sources."""
+    for params, explicit in sources:
+        value = params.get(key)
+        if value is None:
+            continue
+        if not explicit and value == _CLIENT_FILLER_VALUES[key]:
+            continue
+        return cast(value)
+    return default
 
 
-def resolve_sampling(params: dict) -> RequestSampling:
+def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
     """``temperature``/``top_k`` steer the text, ``audio_temperature`` /
-    ``audio_top_k`` the codes; ``seed`` makes both draws reproducible."""
-    stage = (params.get("stage_sampling") or {}).get("lm") or {}
-    seed = params.get("seed")
+    ``audio_top_k`` the codes; ``seed`` makes both draws reproducible.
+
+    Text values equal to the client's filler defaults fall back to the
+    reference defaults unless ``explicit_fields`` names them.
+    """
+    stage_sampling = (params.get("stage_sampling") or {}).get(LM_STAGE) or {}
+    lm_params = stage_request_params(params, LM_STAGE)
+    explicit = set(explicit_fields)
+    seed = lm_params.get("seed")
     if isinstance(seed, bool):
         raise ValueError("PersonaPlex seed must be an integer")
+
+    def text(key: str, default, cast):
+        sources = [(stage_sampling, False), (lm_params, key in explicit)]
+        return _text_param(sources, key, default, cast)
+
     return RequestSampling(
-        text_temperature=_float_param(
-            stage,
-            "temperature",
-            _float_param(params, "temperature", DEFAULT_TEXT_TEMPERATURE),
-        ),
-        text_top_k=_int_param(
-            stage, "top_k", _int_param(params, "top_k", DEFAULT_TEXT_TOP_K)
-        ),
+        text_temperature=text("temperature", DEFAULT_TEXT_TEMPERATURE, float),
+        text_top_k=text("top_k", DEFAULT_TEXT_TOP_K, int),
         audio=AudioSampling(
-            temperature=_float_param(
-                params, "audio_temperature", DEFAULT_AUDIO_TEMPERATURE
+            temperature=_param(
+                lm_params, "audio_temperature", DEFAULT_AUDIO_TEMPERATURE, float
             ),
-            top_k=_int_param(params, "audio_top_k", DEFAULT_AUDIO_TOP_K),
+            top_k=_param(lm_params, "audio_top_k", DEFAULT_AUDIO_TOP_K, int),
         ),
         seed=None if seed is None else int(seed),
     )
@@ -112,14 +140,28 @@ def timeline_from_state(state: PersonaPlexState) -> Timeline:
     )
 
 
-def build_lm_request(payload: StagePayload, *, vocab_size: int) -> SGLangARRequestData:
+def build_lm_request(
+    payload: StagePayload, *, vocab_size: int, context_length: int | None = None
+) -> SGLangARRequestData:
     """One request per recording: the whole prompt as prefill, then one
     decode step per 80 ms frame of the caller's audio."""
     state = PersonaPlexState.from_dict(payload.data)
     timeline = timeline_from_state(state)
-    sampling = resolve_sampling(payload.request.params)
+    metadata = payload.request.metadata or {}
+    sampling = resolve_sampling(
+        payload.request.params, metadata.get(EXPLICIT_GENERATION_PARAMS_KEY) or ()
+    )
     if timeline.num_frames < 1:
         raise ValueError("PersonaPlex needs at least one 80 ms frame of caller audio")
+    positions = timeline.num_prompt_positions + timeline.num_frames
+    if context_length is not None and positions > context_length - 1:
+        raise ValueError(
+            f"PersonaPlex request needs {positions} positions "
+            f"({timeline.num_prompt_positions} prompt + {timeline.num_frames} caller "
+            f"frames, {timeline.num_frames * SAMPLES_PER_FRAME / SAMPLE_RATE:.1f} s) "
+            f"but the LM context holds {context_length - 1}; shorten the recording "
+            "or raise the lm stage's context_length"
+        )
 
     sampling_params = SamplingParams(
         max_new_tokens=timeline.num_frames,
@@ -208,5 +250,6 @@ __all__ = [
     "build_lm_request",
     "lm_stream_output_builder",
     "resolve_sampling",
+    "stage_request_params",
     "timeline_from_state",
 ]

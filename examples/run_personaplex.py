@@ -90,10 +90,20 @@ def _extra_params(args: argparse.Namespace) -> dict:
     return params
 
 
+def _explicit_fields(args: argparse.Namespace) -> list[str]:
+    fields = []
+    if args.greedy or args.temperature is not None:
+        fields.append("temperature")
+    if args.top_k is not None:
+        fields.append("top_k")
+    return fields
+
+
 async def run(args: argparse.Namespace) -> int:
     from sglang_omni.client import Client, GenerateRequest, SamplingParams
     from sglang_omni.models.personaplex.config import PersonaPlexPipelineConfig
     from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
+    from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
 
     config = PersonaPlexPipelineConfig(model_path=args.model_path)
     runner = MultiProcessPipelineRunner(config)
@@ -114,6 +124,7 @@ async def run(args: argparse.Namespace) -> int:
                 else SamplingParams()
             ),
             extra_params=_extra_params(args),
+            metadata={EXPLICIT_GENERATION_PARAMS_KEY: _explicit_fields(args)},
             output_modalities=["text", "audio"],
             stream=False,
         )

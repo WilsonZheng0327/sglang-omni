@@ -877,9 +877,11 @@ that happened to contain an older version of the test.
   Llama-shaped backbone config and checkpoint shim, checkpoint weight routing
   and embedding columns, model-runner prefill/decode rows and frame handoff,
   per-request streaming code2wav and abort cleanup, preprocessing (caller
-  channel, role prompt, voice resolution), and request lowering (decode
-  budget, sampling knobs, seeds, stream chunks, input validation). CPU only,
-  no weights; runner and request tests need SGLang but start no engine.
+  channel, `audios` input, role prompt, voice resolution, `stage_params`),
+  voice-archive unpacking (read-only fallback, no partial folder), and
+  request lowering (decode budget, reference sampling defaults over client
+  filler values, seeds, stream chunks, context limit, input validation). CPU
+  only, no weights; runner and request tests need SGLang but start no engine.
 
 - `unit_test/llada2_uni/`: LLaDA2-Uni request lowering to the upstream
   diffusion-language-model token-array contract.

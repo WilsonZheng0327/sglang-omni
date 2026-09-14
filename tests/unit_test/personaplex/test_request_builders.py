@@ -6,6 +6,7 @@ import torch
 
 from sglang_omni.models.personaplex.architecture import (
     DEFAULT_AUDIO_TEMPERATURE,
+    DEFAULT_AUDIO_TOP_K,
     DEFAULT_TEXT_TEMPERATURE,
     DEFAULT_TEXT_TOP_K,
     TEXT_PAD_ID,
@@ -17,18 +18,18 @@ from sglang_omni.models.personaplex.request_builders import (
     lm_stream_output_builder,
     resolve_sampling,
 )
-from sglang_omni.proto import StagePayload
+from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
 from sglang_omni.proto.request import OmniRequest
+from sglang_omni.serve.openai_errors import is_bad_request_error
 
 
-def _payload(num_frames: int, params=None) -> StagePayload:
+def _payload(num_frames: int, params=None, metadata=None) -> StagePayload:
     state = PersonaPlexState(
         text_prompt_ids=[11, 12, 13],
         user_codes=torch.zeros(num_frames, 8, dtype=torch.long),
     )
-    return StagePayload(
-        "r", request=OmniRequest(inputs={}, params=params or {}), data=state.to_dict()
-    )
+    request = OmniRequest(inputs={}, params=params or {}, metadata=metadata or {})
+    return StagePayload("r", request=request, data=state.to_dict())
 
 
 def test_decode_budget_is_the_frame_count():
@@ -96,3 +97,61 @@ def test_request_boundary_rejects_unusable_inputs():
         build_lm_request(no_audio, vocab_size=32000)
     with pytest.raises(ValueError, match="seed must be an integer"):
         resolve_sampling({"seed": True})
+
+
+def test_client_filler_sampling_values_keep_the_reference_defaults():
+    filler = {"temperature": 1.0, "top_k": -1, "seed": None}
+    sampling = resolve_sampling(filler)
+    assert sampling.text_temperature == DEFAULT_TEXT_TEMPERATURE
+    assert sampling.text_top_k == DEFAULT_TEXT_TOP_K
+
+    chosen = resolve_sampling(filler, explicit_fields=["temperature", "top_k"])
+    assert chosen.text_temperature == 1.0 and chosen.text_top_k == -1
+
+    staged = resolve_sampling(
+        {**filler, "stage_sampling": {"lm": {"temperature": 0.3, "top_k": -1}}}
+    )
+    assert staged.text_temperature == 0.3 and staged.text_top_k == DEFAULT_TEXT_TOP_K
+
+    data = build_lm_request(
+        _payload(2, filler, {EXPLICIT_GENERATION_PARAMS_KEY: ["temperature"]}),
+        vocab_size=32000,
+    )
+    assert data.req.sampling_params.temperature == 1.0
+    assert data.req.sampling_params.top_k == DEFAULT_TEXT_TOP_K
+
+
+def test_lm_stage_params_set_audio_sampling_and_seed():
+    sampling = resolve_sampling(
+        {
+            "audio_temperature": 0.5,
+            "stage_params": {
+                "lm": {"audio_temperature": 0.2, "audio_top_k": 7, "seed": 3}
+            },
+        }
+    )
+    assert sampling.audio.temperature == 0.2 and sampling.audio.top_k == 7
+    assert sampling.seed == 3
+    assert resolve_sampling({}).audio.top_k == DEFAULT_AUDIO_TOP_K
+
+
+def test_request_longer_than_the_context_is_rejected_with_the_limit():
+    data = build_lm_request(_payload(4), vocab_size=32000, context_length=4096)
+    prompt = data.talker_model_inputs["timeline"].num_prompt_positions
+    fits = 4096 - 1 - prompt
+    build_lm_request(_payload(fits), vocab_size=32000, context_length=4096)
+    with pytest.raises(ValueError, match=r"needs 4096 positions .* holds 4095"):
+        build_lm_request(_payload(fits + 1), vocab_size=32000, context_length=4096)
+
+
+def test_request_errors_are_reported_as_bad_requests():
+    raised = []
+    for call in (
+        lambda: build_lm_request(_payload(0), vocab_size=32000),
+        lambda: build_lm_request(_payload(9000), vocab_size=32000, context_length=8192),
+        lambda: resolve_sampling({"seed": True}),
+    ):
+        with pytest.raises(ValueError) as error:
+            call()
+        raised.append(error.value)
+    assert all(is_bad_request_error(error) for error in raised)

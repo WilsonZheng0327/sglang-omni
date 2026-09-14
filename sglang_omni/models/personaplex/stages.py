@@ -11,6 +11,7 @@ from sglang_omni.models.personaplex.components.mimi import (
     load_mimi_codec,
     resolve_mimi_weights,
 )
+from sglang_omni.models.personaplex.config import PREPROCESSING_STAGE
 from sglang_omni.models.personaplex.engine_builder import PersonaPlexEngineBuilder
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.prompts import (
@@ -23,6 +24,7 @@ from sglang_omni.models.personaplex.prompts import (
     resolve_voice_path,
     tokenize_text_prompt,
 )
+from sglang_omni.models.personaplex.request_builders import stage_request_params
 from sglang_omni.models.weight_loader import resolve_model_path
 from sglang_omni.preprocessing.transcription import resolve_audio_source
 from sglang_omni.proto import StagePayload
@@ -39,6 +41,20 @@ def _load_channels(source, *, source_name: str):
     )
 
 
+def _caller_audio_source(payload: StagePayload):
+    """The caller recording: an ``audio_path``-style input, or the one entry of
+    ``audios`` that chat completions sends."""
+    inputs = payload.request.inputs
+    if isinstance(inputs, dict) and inputs.get("audios"):
+        audios = inputs["audios"]
+        if len(audios) != 1:
+            raise ValueError(
+                f"PersonaPlex takes one caller recording, got {len(audios)} audios"
+            )
+        return audios[0]
+    return resolve_audio_source(payload)
+
+
 def _request_text_prompt(params: dict) -> str | None:
     for key in ("text_prompt", "instructions"):
         if key in params:
@@ -52,11 +68,11 @@ def create_preprocessing_executor(model_path: str, **_):
     voice_cache: dict[Path, object] = {}
 
     def preprocess(payload: StagePayload) -> StagePayload:
-        params = payload.request.params
+        params = stage_request_params(payload.request.params, PREPROCESSING_STAGE)
         # Note (wilsonzheng0327): Channel 0, not a downmix: in a two-party recording the
         # agent is on channel 1.
         channels = _load_channels(
-            resolve_audio_source(payload), source_name="PersonaPlex"
+            _caller_audio_source(payload), source_name="PersonaPlex"
         )
         waveform = pad_to_whole_frames(
             torch.as_tensor(channels[0], dtype=torch.float32)
@@ -131,6 +147,10 @@ def create_lm_executor(
     server_args_overrides=None,
     **overrides,
 ):
+    server_args_overrides = {**overrides, **(server_args_overrides or {})}
+    # Note (wilsonzheng0327): The shim config is written before the engine reads its
+    # overrides, so an engine context_length must reach the builder too.
+    context_length = server_args_overrides.get("context_length", context_length)
     builder = PersonaPlexEngineBuilder(
         max_running_requests=1, context_length=context_length
     )
@@ -139,7 +159,7 @@ def create_lm_executor(
         device=device,
         gpu_id=gpu_id,
         dtype=dtype or "bfloat16",
-        server_args_overrides={**overrides, **(server_args_overrides or {})} or None,
+        server_args_overrides=server_args_overrides or None,
     )
 
 
