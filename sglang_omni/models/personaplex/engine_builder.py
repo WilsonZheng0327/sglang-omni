@@ -83,7 +83,9 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
         vocab_size = int(model.config.vocab_size)
 
         def build(payload):
-            return build_lm_request(payload, vocab_size=vocab_size)
+            return build_lm_request(
+                payload, vocab_size=vocab_size, context_length=self.context_length
+            )
 
         return build, apply_lm_result
 

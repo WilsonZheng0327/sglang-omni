@@ -13,13 +13,15 @@ from sglang_omni.config import (
 from sglang_omni.models.personaplex.hf_config import PERSONAPLEX_ARCH
 
 MODEL_STAGES_PREFIX = "sglang_omni.models.personaplex.stages"
+PREPROCESSING_STAGE = "preprocessing"
+LM_STAGE = "lm"
 CODE2WAV_STAGE = "code2wav"
 
 
 def personaplex_stages_factory() -> list[StageConfig]:
     return [
         StageConfig(
-            name="preprocessing",
+            name=PREPROCESSING_STAGE,
             process="pipeline",
             factory_path=f"{MODEL_STAGES_PREFIX}.create_preprocessing_executor",
             next="mimi_encode",
@@ -29,10 +31,10 @@ def personaplex_stages_factory() -> list[StageConfig]:
             process="pipeline",
             factory_path=f"{MODEL_STAGES_PREFIX}.create_mimi_encode_executor",
             gpu=0,
-            next="lm",
+            next=LM_STAGE,
         ),
         EngineStageConfig(
-            name="lm",
+            name=LM_STAGE,
             process="lm",
             factory_path=f"{MODEL_STAGES_PREFIX}.create_lm_executor",
             factory=FactoryArgs(dtype="bfloat16"),
@@ -61,7 +63,7 @@ def personaplex_stages_factory() -> list[StageConfig]:
 class PersonaPlexPipelineConfig(PipelineConfig):
     architecture: ClassVar[str] = PERSONAPLEX_ARCH
     stage_config_types: ClassVar[dict[str, type[StageConfig]]] = {
-        "lm": EngineStageConfig
+        LM_STAGE: EngineStageConfig
     }
 
     model_path: str

@@ -11,6 +11,7 @@ does. The role prompt is SentencePiece text between ``<system>`` tags.
 from __future__ import annotations
 
 import math
+import shutil
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -78,8 +79,40 @@ class VoicePrompt:
     waveform: torch.Tensor | None = None
 
 
+def _unpack_voices(archive: Path, parent: Path) -> Path:
+    """``parent/voices``, unpacked from ``archive`` unless it already exists.
+
+    The archive is unpacked into a staging folder and renamed into place, so an
+    interrupted unpack never leaves a partial ``voices/`` behind.
+    """
+    target = parent / VOICES_DIR_NAME
+    if target.is_dir():
+        return target
+    staging = Path(tempfile.mkdtemp(prefix=f".{VOICES_DIR_NAME}-", dir=parent))
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(path=staging, filter="data")
+        unpacked = staging / VOICES_DIR_NAME
+        if not unpacked.is_dir():
+            raise RuntimeError(
+                f"{archive} did not contain a {VOICES_DIR_NAME}/ directory"
+            )
+        try:
+            unpacked.rename(target)
+        except OSError:
+            if not target.is_dir():
+                raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return target
+
+
 def voices_dir(model_dir: str | Path) -> Path:
-    """The extracted ``voices/`` folder, unpacking ``voices.tgz`` on first use."""
+    """The extracted ``voices/`` folder, unpacking ``voices.tgz`` on first use.
+
+    It is unpacked next to the checkpoint, or into the temp directory when the
+    checkpoint folder cannot be written (permissions, a read-only mount).
+    """
     model_dir = Path(model_dir)
     extracted = model_dir / VOICES_DIR_NAME
     if extracted.is_dir():
@@ -90,22 +123,15 @@ def voices_dir(model_dir: str | Path) -> Path:
             f"no {VOICES_DIR_NAME}/ or {VOICES_ARCHIVE_NAME} under {model_dir}; "
             "pass a voice prompt path instead of a voice name"
         )
-    target = model_dir
     try:
-        with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(path=target, filter="data")
-    except PermissionError:
-        target = (
+        return _unpack_voices(archive, model_dir)
+    except OSError:
+        fallback = (
             Path(tempfile.gettempdir())
             / f"sglang-omni-personaplex-{archive.stat().st_ino}"
         )
-        target.mkdir(exist_ok=True)
-        with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(path=target, filter="data")
-    extracted = target / VOICES_DIR_NAME
-    if not extracted.is_dir():
-        raise RuntimeError(f"{archive} did not contain a {VOICES_DIR_NAME}/ directory")
-    return extracted
+        fallback.mkdir(exist_ok=True)
+        return _unpack_voices(archive, fallback)
 
 
 def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
