@@ -12,7 +12,6 @@ import torch
 
 from sglang_omni.models.personaplex.architecture import SAMPLE_RATE
 from sglang_omni.models.personaplex.components.mimi import MimiCodec, MimiDecodeState
-from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.proto import StagePayload
 from sglang_omni.scheduling.messages import OutgoingMessage
 from sglang_omni.scheduling.streaming_simple_scheduler import StreamingSimpleScheduler
@@ -67,12 +66,6 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
     def clear_stream_state(self, request_id: str) -> None:
         self._states.pop(request_id, None)
 
-    def _num_samples(self, request_id: str) -> int:
-        payload = self._stream_payloads.get(request_id)
-        if payload is None:
-            return 0
-        return int(PersonaPlexState.from_dict(payload.data).num_samples)
-
     @torch.inference_mode()
     def on_stream_chunk(self, request_id: str, item) -> list[OutgoingMessage]:
         state = self._states.setdefault(request_id, _StreamState(self._codec))
@@ -81,13 +74,13 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
         )
         waveform = self._codec.decode_step(codes_FK.T[None], state.decode_state)[0, 0]
         waveform = waveform.float().cpu()
-        state.audio_parts.append(waveform)
-        # Note (wilsonzheng0327): The payload carrying the length can arrive after the
-        # chunks, so what cannot be trimmed here is trimmed in the assembled reply.
-        num_samples = self._num_samples(request_id)
+        # Note (wilsonzheng0327): The terminal payload only arrives after the LM finishes,
+        # so the caller length travels with each chunk.
+        num_samples = int((item.metadata or {}).get("num_samples") or 0)
         if num_samples:
             waveform = trim_to_caller(waveform, max(num_samples - state.emitted, 0))
         state.emitted += waveform.shape[-1]
+        state.audio_parts.append(waveform)
         return [_audio_message(request_id, waveform)]
 
     def on_stream_done(self, request_id: str) -> list[OutgoingMessage]:
@@ -95,7 +88,6 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
         if state is None:
             return []
         waveform = torch.cat(state.audio_parts) if state.audio_parts else torch.zeros(0)
-        waveform = trim_to_caller(waveform, self._num_samples(request_id))
         return [
             OutgoingMessage(
                 request_id=request_id,

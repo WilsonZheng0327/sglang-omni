@@ -23,10 +23,13 @@ from sglang_omni.proto.request import OmniRequest
 from sglang_omni.serve.openai_errors import is_bad_request_error
 
 
-def _payload(num_frames: int, params=None, metadata=None) -> StagePayload:
+def _payload(
+    num_frames: int, params=None, metadata=None, num_samples: int = 0
+) -> StagePayload:
     state = PersonaPlexState(
         text_prompt_ids=[11, 12, 13],
         user_codes=torch.zeros(num_frames, 8, dtype=torch.long),
+        num_samples=num_samples,
     )
     request = OmniRequest(inputs={}, params=params or {}, metadata=metadata or {})
     return StagePayload("r", request=request, data=state.to_dict())
@@ -75,13 +78,14 @@ def test_result_carries_text_ids_and_frames_and_drops_inputs():
 
 
 def test_stream_builder_ships_pending_frames_to_the_codec():
-    data = build_lm_request(_payload(2), vocab_size=32000)
+    data = build_lm_request(_payload(2, num_samples=3000), vocab_size=32000)
     assert lm_stream_output_builder("r", data, None) == []
     data.talker_model_inputs["pending_frames"].append(torch.arange(8))
     messages = lm_stream_output_builder("r", data, None)
     assert len(messages) == 1
     assert messages[0].target == "code2wav"
     assert messages[0].data.shape == (1, 8)
+    assert messages[0].metadata["num_samples"] == 3000
     assert data.talker_model_inputs["pending_frames"] == []
 
 
@@ -112,6 +116,11 @@ def test_client_filler_sampling_values_keep_the_reference_defaults():
         {**filler, "stage_sampling": {"lm": {"temperature": 0.3, "top_k": -1}}}
     )
     assert staged.text_temperature == 0.3 and staged.text_top_k == DEFAULT_TEXT_TOP_K
+
+    stage_params = resolve_sampling(
+        {**filler, "stage_params": {"lm": {"temperature": 1.0, "top_k": -1}}}
+    )
+    assert stage_params.text_temperature == 1.0 and stage_params.text_top_k == -1
 
     data = build_lm_request(
         _payload(2, filler, {EXPLICIT_GENERATION_PARAMS_KEY: ["temperature"]}),

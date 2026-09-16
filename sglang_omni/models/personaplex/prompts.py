@@ -25,12 +25,12 @@ from sglang_omni.models.personaplex.architecture import (
     SAMPLES_PER_FRAME,
     SYSTEM_TAG,
     TEXT_MARKER_IDS,
-    TEXT_TOKENIZER_NAME,
-    VOICES_ARCHIVE_NAME,
-    VOICES_DIR_NAME,
 )
 from sglang_omni.models.personaplex.timeline import voice_tail_codes_from_cache
 
+TEXT_TOKENIZER_NAME = "tokenizer_spm_32k_3.model"
+VOICES_ARCHIVE_NAME = "voices.tgz"
+VOICES_DIR_NAME = "voices"
 VOICE_PROMPT_TARGET_LUFS = -24.0
 _VOICE_SUFFIXES = (".pt", ".wav", ".flac", ".mp3", ".ogg")
 

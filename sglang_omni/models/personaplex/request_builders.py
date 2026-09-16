@@ -60,15 +60,19 @@ class RequestSampling:
         )
 
 
+def _stage_overrides(params: dict, stage: str) -> dict:
+    stage_params = params.get("stage_params")
+    overrides = stage_params.get(stage) if isinstance(stage_params, dict) else None
+    return overrides if isinstance(overrides, dict) else {}
+
+
 def stage_request_params(params: dict, stage: str) -> dict:
     """Request params with stage_params[stage] layered on top.
 
     The in-process client can set PersonaPlex options at the top level; an HTTP
     request reaches them only through stage_params.
     """
-    stage_params = params.get("stage_params")
-    overrides = stage_params.get(stage) if isinstance(stage_params, dict) else None
-    return {**params, **overrides} if isinstance(overrides, dict) else dict(params)
+    return {**params, **_stage_overrides(params, stage)}
 
 
 def _param(params: dict, key: str, default, cast):
@@ -93,17 +97,23 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
     audio_top_k the codes; seed makes both draws reproducible.
 
     Text values equal to the client's filler defaults fall back to the
-    reference defaults unless explicit_fields names them.
+    reference defaults unless explicit_fields names them or they come from
+    stage_params, which the client never fills.
     """
     stage_sampling = (params.get("stage_sampling") or {}).get(LM_STAGE) or {}
-    lm_params = stage_request_params(params, LM_STAGE)
+    lm_overrides = _stage_overrides(params, LM_STAGE)
+    lm_params = {**params, **lm_overrides}
     explicit = set(explicit_fields)
     seed = lm_params.get("seed")
     if isinstance(seed, bool):
         raise ValueError("PersonaPlex seed must be an integer")
 
     def text(key: str, default, cast):
-        sources = [(stage_sampling, False), (lm_params, key in explicit)]
+        sources = [
+            (stage_sampling, False),
+            (lm_overrides, True),
+            (params, key in explicit),
+        ]
         return _text_param(sources, key, default, cast)
 
     return RequestSampling(
@@ -196,6 +206,7 @@ def build_lm_request(
     data.talker_model_inputs = {
         "timeline": timeline,
         "sampling": sampling,
+        "num_samples": int(state.num_samples),
         "agent_rows": [],
         "frames": [],
         "pending_frames": [],
@@ -240,7 +251,10 @@ def lm_stream_output_builder(
             type="stream",
             data=frames,
             target=CODE2WAV_STAGE,
-            metadata={"modality": "audio_codes"},
+            metadata={
+                "modality": "audio_codes",
+                "num_samples": data.talker_model_inputs["num_samples"],
+            },
         )
     ]
 

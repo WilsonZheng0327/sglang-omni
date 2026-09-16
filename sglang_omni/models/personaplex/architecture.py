@@ -54,9 +54,6 @@ DEFAULT_AUDIO_TOP_K = 250
 
 MOSHI_WEIGHTS_NAME = "model.safetensors"
 MIMI_WEIGHTS_GLOB = "tokenizer-*.safetensors"
-TEXT_TOKENIZER_NAME = "tokenizer_spm_32k_3.model"
-VOICES_ARCHIVE_NAME = "voices.tgz"
-VOICES_DIR_NAME = "voices"
 
 
 @dataclass(frozen=True)

@@ -170,9 +170,9 @@ class MimiTransformer(StreamingModule):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Note (wilsonzheng0327): Past the ring's capacity the result depends on the
+        # Note (wilsonzheng0327): Once an input fills the ring the result depends on the
         # reference's key order and chunking, so a long input replays the streaming path.
-        if x.shape[-1] > self.spec.context:
+        if x.shape[-1] >= self.spec.context:
             state = self.init_state()
             chunk = max(self.spec.frame_ratio, 1)
             return torch.cat(

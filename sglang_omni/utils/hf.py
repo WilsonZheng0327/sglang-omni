@@ -237,7 +237,7 @@ def try_resolve_arch_from_personaplex_layout(
             filename=_PERSONAPLEX_LAYOUT_MARKER,
             revision=revision,
         )
-    except Exception:
+    except (OSError, ValueError):
         return None
     return _PERSONAPLEX_ARCHITECTURE
 

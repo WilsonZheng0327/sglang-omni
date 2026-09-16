@@ -120,19 +120,18 @@ def create_mimi_encode_executor(
     del dtype  # Note (wilsonzheng0327): Mimi runs in float32, as the reference does.
     codec, device = _codec(model_path, device=device, gpu_id=gpu_id)
 
+    def encode_waveform(waveform: torch.Tensor) -> torch.Tensor:
+        codes = codec.encode(
+            waveform.to(device=device, dtype=torch.float32).view(1, 1, -1)
+        )
+        return codes[0].T.cpu()
+
     def encode(payload: StagePayload) -> StagePayload:
         state = PersonaPlexState.from_dict(payload.data)
-        for source, target in (
-            ("waveform", "user_codes"),
-            ("voice_waveform", "voice_codes"),
-        ):
-            waveform = getattr(state, source)
-            if waveform is None:
-                continue
-            codes = codec.encode(
-                waveform.to(device=device, dtype=torch.float32).view(1, 1, -1)
-            )
-            setattr(state, target, codes[0].T.cpu())
+        if state.waveform is not None:
+            state.user_codes = encode_waveform(state.waveform)
+        if state.voice_waveform is not None:
+            state.voice_codes = encode_waveform(state.voice_waveform)
         payload.data = state.to_dict()
         return payload
 
