@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """What a conversation opens with: a voice, and a role in text.
 
-PersonaPlex ships 18 voices as ``.pt`` files inside ``voices.tgz``. Each holds
+PersonaPlex ships 18 voices as .pt files inside voices.tgz. Each holds
 the fused input rows the reference stepped through while "listening" to that
 voice, so a packaged voice costs no codec pass. A voice may also be a
 recording, which is loudness-normalised and Mimi-encoded like the reference
-does. The role prompt is SentencePiece text between ``<system>`` tags.
+does. The role prompt is SentencePiece text between <system> tags.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def decode_text(tokenizer, token_ids: list[int]) -> str:
 
 @dataclass
 class VoicePrompt:
-    """Either ``embeddings`` (packaged voice) or ``waveform`` (a recording)."""
+    """Either embeddings (packaged voice) or waveform (a recording)."""
 
     frames: int
     embeddings: torch.Tensor | None = None
@@ -80,10 +80,10 @@ class VoicePrompt:
 
 
 def _unpack_voices(archive: Path, parent: Path) -> Path:
-    """``parent/voices``, unpacked from ``archive`` unless it already exists.
+    """parent/voices, unpacked from archive unless it already exists.
 
     The archive is unpacked into a staging folder and renamed into place, so an
-    interrupted unpack never leaves a partial ``voices/`` behind.
+    interrupted unpack never leaves a partial voices/ behind.
     """
     target = parent / VOICES_DIR_NAME
     if target.is_dir():
@@ -108,7 +108,7 @@ def _unpack_voices(archive: Path, parent: Path) -> Path:
 
 
 def voices_dir(model_dir: str | Path) -> Path:
-    """The extracted ``voices/`` folder, unpacking ``voices.tgz`` on first use.
+    """The extracted voices/ folder, unpacking voices.tgz on first use.
 
     It is unpacked next to the checkpoint, or into the temp directory when the
     checkpoint folder cannot be written (permissions, a read-only mount).
@@ -135,7 +135,7 @@ def voices_dir(model_dir: str | Path) -> Path:
 
 
 def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
-    """A voice is a file path, or the name of a packaged voice (``NATF2``)."""
+    """A voice is a file path, or the name of a packaged voice (NATF2)."""
     direct = Path(voice).expanduser()
     if direct.is_file():
         return direct
@@ -174,7 +174,7 @@ def pad_to_whole_frames(waveform: torch.Tensor) -> torch.Tensor:
 
 
 def load_voice_prompt(path: str | Path, *, load_audio) -> VoicePrompt:
-    """``load_audio(path)`` must return the recording as ``[channels, samples]``
+    """load_audio(path) must return the recording as [channels, samples]
     float at 24 kHz; only the first channel is the voice."""
     path = Path(path)
     if path.suffix == ".pt":

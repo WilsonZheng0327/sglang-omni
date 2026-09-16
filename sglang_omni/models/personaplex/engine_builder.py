@@ -26,7 +26,7 @@ from sglang_omni.scheduling.engine_factory import TtsEngineBuilder
 def shim_checkpoint_dir(source: Path, *, context_length: int) -> Path:
     """A directory SGLang can load: the LM weights and a Llama config.
 
-    Only ``model.safetensors`` is linked. The Mimi weights sit next to it in
+    Only model.safetensors is linked. The Mimi weights sit next to it in
     the checkpoint and SGLang would otherwise sweep them into the LM.
     """
     source = source.resolve()

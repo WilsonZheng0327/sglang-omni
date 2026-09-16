@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The depth transformer: one frame's 8 agent codebooks, one step each.
 
-Every step has its own projection, gating and output head (``weights_per_step``
+Every step has its own projection, gating and output head (weights_per_step
 in the reference); the norms are shared. Attention runs over the steps of the
 same frame only, so its cache is a list that starts empty every frame.
 """
@@ -24,8 +24,8 @@ from sglang_omni.models.personaplex.architecture import (
 
 
 def rms_norm_f32(x: torch.Tensor, alpha: torch.Tensor, eps: float) -> torch.Tensor:
-    """``x * alpha / sqrt(eps + mean(x²))`` computed in float32, as the checkpoint
-    was trained (``rms_norm_f32``: eps inside the root, not the usual outside)."""
+    """x * alpha / sqrt(eps + mean(x²)) computed in float32, as the checkpoint
+    was trained (rms_norm_f32: eps inside the root, not the usual outside)."""
     x_f32 = x.float()
     variance = eps + x_f32.pow(2).mean(dim=-1, keepdim=True)
     return (x_f32 * (alpha.float() * torch.rsqrt(variance))).to(x.dtype)
@@ -97,10 +97,10 @@ class Depformer(nn.Module):
         Args:
             text_token_B: the frame's sampled text token.
             transformer_out_BD: the temporal transformer's normalised output.
-            forced_BK: ``[B, steps]`` codes to keep instead of sampling, ``-1``
+            forced_BK: [B, steps] codes to keep instead of sampling, -1
                 where the step is free. A forced code still conditions the
                 steps after it, as teacher forcing does in the reference.
-            sample: ``[B, card]`` float logits → ``[B]`` ids.
+            sample: [B, card] float logits → [B] ids.
         """
         caches: list[list[torch.Tensor]] = [[] for _ in self.layers]
         previous = text_token_B
@@ -121,7 +121,7 @@ class Depformer(nn.Module):
         return torch.stack(codes, dim=1)
 
     def load_reference_weights(self, weights: dict[str, torch.Tensor]) -> None:
-        """Load ``depformer*`` / ``linears.*`` tensors in the checkpoint's names.
+        """Load depformer* / linears.* tensors in the checkpoint's names.
 
         Per-step tensors are stacked along a leading step axis; a checkpoint
         with more steps than we run (16 vs 8) simply has its tail ignored.

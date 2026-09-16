@@ -224,8 +224,8 @@ def try_resolve_arch_from_personaplex_layout(
 ) -> str | None:
     """Resolve PersonaPlex (and its Moshi base) from the released layout.
 
-    The checkpoint carries no ``architectures``; what identifies the family
-    is the Moshi text tokenizer shipped alongside ``model.safetensors``.
+    The checkpoint carries no architectures entry; what identifies the family
+    is the Moshi text tokenizer shipped alongside model.safetensors.
     """
     if os.path.isfile(os.path.join(model_path, _PERSONAPLEX_LAYOUT_MARKER)):
         return _PERSONAPLEX_ARCHITECTURE
