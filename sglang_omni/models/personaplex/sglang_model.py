@@ -84,8 +84,8 @@ class PersonaPlexForCausalLM(nn.Module):
         self._hidden_out = torch.zeros(max_batch, dim, dtype=dtype, device=device)
 
     def get_attention_sliding_window_size(self) -> int:
-        # Note (wilsonzheng0327): The reference attends where ``delta < context``: the
-        # current step plus ``context - 1`` earlier ones.
+        # Note (wilsonzheng0327): The reference attends where delta < context: the
+        # current step plus context - 1 earlier ones.
         return self.temporal.context - 1
 
     def embed_rows(self, rows_NK: torch.Tensor) -> torch.Tensor:

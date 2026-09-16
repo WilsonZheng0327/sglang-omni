@@ -35,8 +35,8 @@ def apply_interleaved_rope(
     """Rotate adjacent pairs (2i, 2i+1), the GPT-J convention, in float32.
 
     Args:
-        q, k: ``[B, H, T, D]``.
-        positions: ``[T]`` absolute positions.
+        q, k: [B, H, T, D].
+        positions: [T] absolute positions.
     """
     dim = q.shape[-1]
     freqs = torch.exp(
@@ -160,7 +160,7 @@ class TransformerState:
 
 
 class MimiTransformer(StreamingModule):
-    """Eight layers over ``[B, C, T]`` frames at the SEANet rate (25 Hz)."""
+    """Eight layers over [B, C, T] frames at the SEANet rate (25 Hz)."""
 
     def __init__(self, spec: MimiSpec) -> None:
         super().__init__()
@@ -247,7 +247,7 @@ def _step_stack(modules: nn.ModuleList, x: torch.Tensor, state: list) -> torch.T
 
 
 class SEANetEncoder(StreamingModule):
-    """Waveform ``[B, 1, T]`` → latent ``[B, dim, T / hop_length]``."""
+    """Waveform [B, 1, T] → latent [B, dim, T / hop_length]."""
 
     def __init__(self, spec: MimiSpec) -> None:
         super().__init__()
@@ -280,7 +280,7 @@ class SEANetEncoder(StreamingModule):
 
 
 class SEANetDecoder(StreamingModule):
-    """Latent ``[B, dim, F]`` → waveform ``[B, 1, F * hop_length]``."""
+    """Latent [B, dim, F] → waveform [B, 1, F * hop_length]."""
 
     def __init__(self, spec: MimiSpec) -> None:
         super().__init__()
@@ -450,14 +450,14 @@ class MimiCodec(nn.Module):
 
     @torch.inference_mode()
     def encode(self, wav_B1T: torch.Tensor) -> torch.Tensor:
-        """``[B, 1, T]`` with ``T`` a multiple of 1920 → codes ``[B, 8, F]``."""
+        """[B, 1, T] with T a multiple of 1920 → codes [B, 8, F]."""
         latent = self.encoder(wav_B1T)
         latent = self.encoder_transformer(latent)
         return self.quantizer.encode(self.downsample(latent))
 
     @torch.inference_mode()
     def decode(self, codes_BKF: torch.Tensor) -> torch.Tensor:
-        """Codes ``[B, 8, F]`` → waveform ``[B, 1, F * 1920]``."""
+        """Codes [B, 8, F] → waveform [B, 1, F * 1920]."""
         latent = self.upsample(self.quantizer.decode(codes_BKF))
         return self.decoder(self.decoder_transformer(latent))
 
@@ -519,7 +519,7 @@ def rename_mimi_key(name: str) -> str | None:
         return None
     for pattern, replacement in _RENAMES:
         # Note (wilsonzheng0327): The reference nests convolutions up to three deep
-        # (``downsample.conv.conv.conv``); here each is one module.
+        # (downsample.conv.conv.conv); here each is one module.
         while True:
             renamed = pattern.sub(replacement, name, count=1)
             if renamed == name:

@@ -38,15 +38,15 @@ from sglang_omni.utils.device import resolve_concrete_device
 
 
 def _load_channels(source, *, source_name: str):
-    """Any sample rate in, ``[channels, samples]`` float32 at 24 kHz out."""
+    """Any sample rate in, [channels, samples] float32 at 24 kHz out."""
     return load_audio(
         source, source_name=source_name, target_sample_rate=SAMPLE_RATE, mono=False
     )
 
 
 def _caller_audio_source(payload: StagePayload):
-    """The caller recording: an ``audio_path``-style input, or the one entry of
-    ``audios`` that chat completions sends."""
+    """The caller recording: an audio_path-style input, or the one entry of
+    audios that chat completions sends."""
     inputs = payload.request.inputs
     if isinstance(inputs, dict) and inputs.get("audios"):
         audios = inputs["audios"]

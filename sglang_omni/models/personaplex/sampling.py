@@ -23,10 +23,10 @@ def sample_token(
     sampling: AudioSampling,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
-    """``[B, card]`` float logits → ``[B]`` token ids.
+    """[B, card] float logits → [B] token ids.
 
     The reference draws from the top-k via the exponential race (argmax of
-    ``p / Exp(1)``), which avoids a host sync; kept so seeded runs line up.
+    p / Exp(1)), which avoids a host sync; kept so seeded runs line up.
     """
     if sampling.greedy:
         return logits.argmax(dim=-1)

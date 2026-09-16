@@ -122,7 +122,7 @@ def _small_transformer() -> MimiTransformer:
 
 
 def _influenced_steps(chunk: int) -> list[int]:
-    """Which steps still depend on step 0, feeding ``chunk`` steps at a time."""
+    """Which steps still depend on step 0, feeding chunk steps at a time."""
     torch.manual_seed(0)
     attention = MimiAttention(dim=8, num_heads=2, context=SMALL.context, max_period=1e4)
     with torch.no_grad():

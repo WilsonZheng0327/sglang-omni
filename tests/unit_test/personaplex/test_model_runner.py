@@ -22,7 +22,7 @@ VOICE_FRAMES = 4
 
 
 class _Depformer:
-    """Returns ``base + step`` codes, keeping forced ones, and records every call."""
+    """Returns base + step codes, keeping forced ones, and records every call."""
 
     spec = SimpleNamespace(steps=8)
 

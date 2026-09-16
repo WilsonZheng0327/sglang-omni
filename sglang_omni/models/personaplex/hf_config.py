@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A Llama-shaped ``config.json`` for the temporal transformer.
+"""A Llama-shaped config.json for the temporal transformer.
 
 The checkpoint's own config carries no architecture. The Moshi backbone is a
 Llama with two twists SGLang's Llama already knows how to honour from config:
 interleaved (GPT-J style) rotary embeddings and an unusually small RMSNorm
 epsilon. The Moshi-specific parts (embeddings, depformer) take their shapes
-from ``architecture`` directly, not from this config.
+from architecture directly, not from this config.
 """
 
 from __future__ import annotations

@@ -3,8 +3,8 @@
 
 The model reads one row of 17 tokens per position (text, 8 agent codebooks,
 8 user codebooks) and predicts the next row. Frames map onto positions with a
-per-stream delay: stream ``k`` of frame ``f`` sits at position ``f + delay[k]``,
-and positions ``0..delay[k]`` hold the stream's initial token. This is the
+per-stream delay: stream k of frame f sits at position f + delay[k],
+and positions 0..delay[k] hold the stream's initial token. This is the
 reference's ring cache written out as a table, so the prefill can be one
 extend and every decode step is a lookup.
 
@@ -13,9 +13,9 @@ A request's positions are:
     0 .. P-1     prompt (voice prompt, silence, text prompt, silence): forced
     P .. P+U-1   one per frame of the caller's audio: text and agent sampled
 
-Row ``P-1+j`` is the input of forward ``j`` (``j = 0`` being the prefill's
-last row); its prediction is row ``P+j``. Output frame ``f`` is complete once
-row ``f+1`` exists: its first codebook lives at ``f``, the rest at ``f+1``.
+Row P-1+j is the input of forward j (j = 0 being the prefill's
+last row); its prediction is row P+j. Output frame f is complete once
+row f+1 exists: its first codebook lives at f, the rest at f+1.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from sglang_omni.models.personaplex.architecture import (
 )
 
 # Note (wilsonzheng0327): Ring width of the reference generator, and so of a saved voice
-# prompt's ``cache``.
+# prompt's cache.
 REFERENCE_CACHE_POSITIONS = MAX_DELAY + 3
 
 UNKNOWN = -1
@@ -49,8 +49,8 @@ UNKNOWN = -1
 def delay_stream(
     frames_FK: torch.Tensor, delays: tuple[int, ...], initial: int
 ) -> torch.Tensor:
-    """Frames ``[F, K]`` → positions ``[F, K]`` with ``d[p, k] = frames[p - delay_k, k]``
-    and the initial token wherever ``p <= delay_k``."""
+    """Frames [F, K] → positions [F, K] with d[p, k] = frames[p - delay_k, k]
+    and the initial token wherever p <= delay_k."""
     num_frames, num_streams = frames_FK.shape
     assert num_streams == len(delays), (num_streams, len(delays))
     out = torch.full_like(frames_FK, initial)
@@ -108,15 +108,15 @@ def build_prompt_frames(
 
 
 def voice_tail_codes_from_cache(cache: torch.Tensor, voice_frames: int) -> torch.Tensor:
-    """Recover the last two voice frames' codes from a saved prompt ``cache``.
+    """Recover the last two voice frames' codes from a saved prompt cache.
 
     A packaged voice ships the fused embeddings of every voice-prompt row plus
     the generator's ring cache at the end of the voice prompt. Only the codes
-    of frames ``V-2`` and ``V-1`` still matter after that point, and the ring
-    holds them: frame ``V-1`` at position ``V-1`` (delay 0) and ``V``
-    (delay 1), frame ``V-2``'s delayed codebooks at ``V-1``.
+    of frames V-2 and V-1 still matter after that point, and the ring
+    holds them: frame V-1 at position V-1 (delay 0) and V
+    (delay 1), frame V-2's delayed codebooks at V-1.
 
-    Returns ``[2, 8]``: frame ``V-2`` (first codebook UNKNOWN) and frame ``V-1``.
+    Returns [2, 8]: frame V-2 (first codebook UNKNOWN) and frame V-1.
     """
     cache = cache.reshape(NUM_STREAMS, -1)
     ring = cache.shape[-1]
@@ -136,17 +136,17 @@ class Timeline:
     """Everything the LM stage needs to run one request.
 
     Attributes:
-        prefill_tokens: ``[P, 17]`` rows for positions ``0..P-1``; UNKNOWN where
+        prefill_tokens: [P, 17] rows for positions 0..P-1; UNKNOWN where
             a row is supplied as an embedding instead.
-        prefill_embeddings: ``[E, dim]`` rows replacing ``prefill_tokens`` at
-            ``prefill_embedding_positions``.
-        agent_row_before_start: agent codebooks at position ``P-1``, the first
-            codebook of output frame ``P-1``.
-        forced_agent_at_start: ``[8]`` agent codebooks at position ``P`` that
+        prefill_embeddings: [E, dim] rows replacing prefill_tokens at
+            prefill_embedding_positions.
+        agent_row_before_start: agent codebooks at position P-1, the first
+            codebook of output frame P-1.
+        forced_agent_at_start: [8] agent codebooks at position P that
             the prompt already fixed (delayed streams), UNKNOWN where sampled.
-        user_rows: ``[P+U, 8]`` user codebooks for every position.
-        num_prompt_positions: ``P``.
-        num_frames: ``U``, the caller's audio frames and the decode budget.
+        user_rows: [P+U, 8] user codebooks for every position.
+        num_prompt_positions: P.
+        num_frames: U, the caller's audio frames and the decode budget.
     """
 
     prefill_tokens: torch.Tensor
@@ -159,7 +159,7 @@ class Timeline:
     num_frames: int
 
     def input_position(self, forward_index: int) -> int:
-        """Position of the row forward ``j`` consumes (``j = 0``: last prefill row)."""
+        """Position of the row forward j consumes (j = 0: last prefill row)."""
         return self.num_prompt_positions - 1 + forward_index
 
 
@@ -172,8 +172,8 @@ def build_timeline(
 ) -> Timeline:
     """Assemble the delayed timeline for one request.
 
-    With ``voice_embeddings`` (a packaged voice) the voice-prompt rows are
-    replaced by the stored fused embeddings; ``voice_tail_codes`` then fills the
+    With voice_embeddings (a packaged voice) the voice-prompt rows are
+    replaced by the stored fused embeddings; voice_tail_codes then fills the
     two voice frames the following rows still read.
     """
     num_prompt = prompt.num_frames
@@ -234,7 +234,7 @@ def build_timeline(
 def output_frame(
     previous_agent_row: torch.Tensor, agent_row: torch.Tensor
 ) -> torch.Tensor:
-    """Codes of the frame whose delayed codebooks arrived with ``agent_row``."""
+    """Codes of the frame whose delayed codebooks arrived with agent_row."""
     frame = agent_row.clone()
     for k, delay in enumerate(DELAYS[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET]):
         if delay == 0:

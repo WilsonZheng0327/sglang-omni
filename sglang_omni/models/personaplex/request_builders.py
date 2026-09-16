@@ -61,10 +61,10 @@ class RequestSampling:
 
 
 def stage_request_params(params: dict, stage: str) -> dict:
-    """Request params with ``stage_params[stage]`` layered on top.
+    """Request params with stage_params[stage] layered on top.
 
     The in-process client can set PersonaPlex options at the top level; an HTTP
-    request reaches them only through ``stage_params``.
+    request reaches them only through stage_params.
     """
     stage_params = params.get("stage_params")
     overrides = stage_params.get(stage) if isinstance(stage_params, dict) else None
@@ -77,7 +77,7 @@ def _param(params: dict, key: str, default, cast):
 
 
 def _text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
-    """The first value a caller actually chose, from ``(params, explicit)`` sources."""
+    """The first value a caller actually chose, from (params, explicit) sources."""
     for params, explicit in sources:
         value = params.get(key)
         if value is None:
@@ -89,11 +89,11 @@ def _text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
 
 
 def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
-    """``temperature``/``top_k`` steer the text, ``audio_temperature`` /
-    ``audio_top_k`` the codes; ``seed`` makes both draws reproducible.
+    """temperature/top_k steer the text, audio_temperature /
+    audio_top_k the codes; seed makes both draws reproducible.
 
     Text values equal to the client's filler defaults fall back to the
-    reference defaults unless ``explicit_fields`` names them.
+    reference defaults unless explicit_fields names them.
     """
     stage_sampling = (params.get("stage_sampling") or {}).get(LM_STAGE) or {}
     lm_params = stage_request_params(params, LM_STAGE)

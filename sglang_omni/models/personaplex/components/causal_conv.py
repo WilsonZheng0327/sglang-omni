@@ -59,7 +59,7 @@ class ConvState:
 
 
 class CausalConv1d(StreamingModule):
-    """Conv1d with left padding of ``effective_kernel - stride`` samples.
+    """Conv1d with left padding of effective_kernel - stride samples.
 
     The whole-sequence path also pads on the right so the last window is
     full; with inputs that are multiples of the stride that padding is zero,
@@ -144,7 +144,7 @@ class ConvTransposeState:
 
 
 class CausalConvTranspose1d(StreamingModule):
-    """ConvTranspose1d whose ``kernel - stride`` trailing outputs are trimmed.
+    """ConvTranspose1d whose kernel - stride trailing outputs are trimmed.
 
     Chunk by chunk those trailing outputs are not dropped but held back: the
     next chunk overlaps them and adds its own contribution before they leave.
