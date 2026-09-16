@@ -6,7 +6,10 @@ from pathlib import Path
 import torch
 
 from sglang_omni.models.personaplex.architecture import MIMI_WEIGHTS_GLOB, SAMPLE_RATE
-from sglang_omni.models.personaplex.code2wav_stream import PersonaPlexCode2WavScheduler
+from sglang_omni.models.personaplex.code2wav_stream import (
+    PersonaPlexCode2WavScheduler,
+    trim_to_caller,
+)
 from sglang_omni.models.personaplex.components.mimi import (
     load_mimi_codec,
     resolve_mimi_weights,
@@ -74,12 +77,11 @@ def create_preprocessing_executor(model_path: str, **_):
         channels = _load_channels(
             _caller_audio_source(payload), source_name="PersonaPlex"
         )
-        waveform = pad_to_whole_frames(
-            torch.as_tensor(channels[0], dtype=torch.float32)
-        )
+        caller = torch.as_tensor(channels[0], dtype=torch.float32)
 
         state = PersonaPlexState.from_dict(payload.data)
-        state.waveform = waveform
+        state.num_samples = int(caller.shape[-1])
+        state.waveform = pad_to_whole_frames(caller)
         state.text_prompt_ids = tokenize_text_prompt(
             tokenizer, _request_text_prompt(params)
         )
@@ -193,7 +195,7 @@ def create_code2wav_executor(
                 0, 0
             ].cpu()
         payload.data = audio_waveform_payload(
-            waveform,
+            trim_to_caller(waveform, state.num_samples),
             sample_rate=SAMPLE_RATE,
             modality="audio",
             source_hint="PersonaPlex",

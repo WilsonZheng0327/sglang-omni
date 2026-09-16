@@ -196,6 +196,7 @@ def build_lm_request(
     data.talker_model_inputs = {
         "timeline": timeline,
         "sampling": sampling,
+        "agent_rows": [],
         "frames": [],
         "pending_frames": [],
     }

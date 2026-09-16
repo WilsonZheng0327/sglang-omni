@@ -48,7 +48,6 @@ class _Model:
 
     def __init__(self, max_batch: int = 2):
         self._fusion_buffer = torch.zeros(max_batch, NUM_STREAMS)
-        self._fusion_mask = torch.zeros(max_batch, dtype=torch.bool)
         self._hidden_out = torch.arange(max_batch * NUM_STREAMS, dtype=torch.float32)
         self._hidden_out = self._hidden_out.view(max_batch, NUM_STREAMS)
         self.depformer = _Depformer()
@@ -127,7 +126,6 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     assert row[0].item() == 77
     assert torch.equal(row[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET], prefill_call.codes)
     assert torch.equal(row[USER_STREAM_OFFSET:], timeline.user_rows[first_position])
-    assert model._fusion_mask[0].item()
 
     runner.post_decode(
         SimpleNamespace(next_token_ids=torch.tensor([78])), None, None, [request]
@@ -166,3 +164,62 @@ def test_seeded_audio_sampler_draws_reproducibly_from_one_generator():
     unseeded = _request(1, params={"audio_temperature": 1.0})
     runner._audio_sampler(unseeded.data)
     assert "audio_generator" not in unseeded.data.talker_model_inputs
+
+
+def test_resume_after_a_retract_replays_the_generated_positions():
+    model = _Model()
+    runner = _runner(model)
+    request = _request(5)
+    data = request.data
+    timeline = data.talker_model_inputs["timeline"]
+    prompt = timeline.num_prompt_positions
+
+    runner.before_prefill(
+        SimpleNamespace(replace_embeds=None, input_ids=torch.zeros(prompt)),
+        SimpleNamespace(reqs=[SimpleNamespace(output_ids=[])]),
+        [request],
+    )
+    runner.post_prefill(
+        SimpleNamespace(next_token_ids=torch.tensor([77])), None, None, [request]
+    )
+    for token, before in ((78, [77]), (79, [77, 78])):
+        runner.before_decode(
+            None, SimpleNamespace(reqs=[SimpleNamespace(output_ids=before)]), [request]
+        )
+        runner.post_decode(
+            SimpleNamespace(next_token_ids=torch.tensor([token])), None, None, [request]
+        )
+
+    generated = [77, 78, 79]
+    agent_rows = list(data.talker_model_inputs["agent_rows"])
+    frames_before = len(data.talker_model_inputs["frames"])
+    assert len(agent_rows) == len(generated)
+
+    forward_batch = SimpleNamespace(
+        replace_embeds=None, input_ids=torch.zeros(prompt + len(generated))
+    )
+    runner.before_prefill(
+        forward_batch,
+        SimpleNamespace(reqs=[SimpleNamespace(output_ids=generated)]),
+        [request],
+    )
+
+    embeds = get_omni_prefill_inputs(forward_batch).input_embeds
+    assert embeds.shape[0] == prompt + len(generated)
+    assert torch.equal(embeds[:prompt], timeline.prefill_tokens.float())
+    for index, token in enumerate(generated):
+        row = embeds[prompt + index].long()
+        assert row[0].item() == token
+        assert torch.equal(
+            row[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET], agent_rows[index]
+        )
+        assert torch.equal(row[USER_STREAM_OFFSET:], timeline.user_rows[prompt + index])
+
+    runner.post_prefill(
+        SimpleNamespace(next_token_ids=torch.tensor([80])), None, None, [request]
+    )
+    resumed = model.depformer.calls[-1]
+    assert (resumed.forced == -1).all()
+    frames = data.talker_model_inputs["frames"]
+    assert len(frames) == frames_before + 1
+    assert torch.equal(frames[-1], output_frame(agent_rows[-1], resumed.codes))

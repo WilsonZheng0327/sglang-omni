@@ -106,12 +106,57 @@ class PersonaPlexModelRunner(ModelRunner):
         )[0]
         frame = output_frame(device_rows["agent_row"], codes)
         device_rows["agent_row"] = codes
+        inputs["agent_rows"].append(codes)
         inputs["frames"].append(frame)
         inputs["pending_frames"].append(frame)
 
+    def _free_codes(self) -> torch.Tensor:
+        return torch.full(
+            (self.model.depformer.spec.steps,),
+            -1,
+            dtype=torch.long,
+            device=self._device,
+        )
+
+    def _generated_rows(self, data, generated: list[int]) -> torch.Tensor:
+        """Embed the positions already generated, replayed after a retract."""
+        model = self.model
+        timeline = self._timeline(data)
+        device_rows = self._rows_to_device(data)
+        agent_rows = data.talker_model_inputs["agent_rows"]
+        start = timeline.num_prompt_positions
+        rows = torch.empty(
+            len(generated), NUM_STREAMS, dtype=torch.long, device=self._device
+        )
+        for index, token in enumerate(generated):
+            rows[index, 0] = int(token)
+            rows[index, AGENT_STREAM_OFFSET:USER_STREAM_OFFSET] = agent_rows[index]
+            rows[index, USER_STREAM_OFFSET:] = device_rows["user_rows"][start + index]
+        return model.embed_rows(rows).to(model._fusion_buffer.dtype)
+
     def before_prefill(self, forward_batch, schedule_batch, requests) -> None:
-        del schedule_batch
-        rows = [self._prefill_rows(request.data) for request in requests]
+        reqs = schedule_batch.reqs if schedule_batch is not None else requests
+        rows = []
+        for request, req in zip(requests, reqs, strict=True):
+            data = request.data
+            inputs = data.talker_model_inputs
+            generated = [int(token) for token in getattr(req, "output_ids", []) or []]
+            prompt_rows = self._prefill_rows(data)
+            if not generated:
+                inputs["prefill_forced"] = self._timeline(
+                    data
+                ).forced_agent_at_start.to(self._device)
+                rows.append(prompt_rows)
+                continue
+            # Note (wilsonzheng0327): Resuming a retracted request replays the prompt
+            # and every generated position, so those rows are embedded again too.
+            self._rows_to_device(data)["agent_row"] = inputs["agent_rows"][
+                len(generated) - 1
+            ]
+            inputs["prefill_forced"] = self._free_codes()
+            rows.append(
+                torch.cat([prompt_rows, self._generated_rows(data, generated)], dim=0)
+            )
         attach_omni_prefill_inputs(
             forward_batch,
             OmniPrefillInputs(
@@ -123,7 +168,12 @@ class PersonaPlexModelRunner(ModelRunner):
         del forward_batch, schedule_batch
         sampled = result.next_token_ids
         for index, request in enumerate(requests):
-            forced = self._timeline(request.data).forced_agent_at_start.to(self._device)
+            inputs = request.data.talker_model_inputs
+            forced = inputs.pop("prefill_forced", None)
+            if forced is None:
+                forced = self._timeline(request.data).forced_agent_at_start.to(
+                    self._device
+                )
             self._spell_frame(index, request, sampled[index], forced)
 
     def before_decode(
@@ -146,16 +196,10 @@ class PersonaPlexModelRunner(ModelRunner):
         model._fusion_buffer[:batch] = model.embed_rows(torch.stack(rows)).to(
             model._fusion_buffer.dtype
         )
-        model._fusion_mask[:batch] = True
 
     def post_decode(self, result, forward_batch, schedule_batch, requests) -> None:
         del forward_batch, schedule_batch
         sampled = result.next_token_ids
-        free = torch.full(
-            (self.model.depformer.spec.steps,),
-            -1,
-            dtype=torch.long,
-            device=self._device,
-        )
+        free = self._free_codes()
         for index, request in enumerate(requests):
             self._spell_frame(index, request, sampled[index], free)

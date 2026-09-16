@@ -10,6 +10,7 @@ from sglang_omni.scheduling.pipeline_state import DeclarativeStateBase, wire
 @dataclass
 class PersonaPlexState(DeclarativeStateBase):
     waveform: Any | None = wire(None, codec="typed_tensor")
+    num_samples: int = wire(0, codec="int")
     text_prompt_ids: list = wire(default_factory=list, codec="list")
     voice_waveform: Any | None = wire(None, codec="typed_tensor")
     voice_embeddings: Any | None = wire(None, codec="typed_tensor")

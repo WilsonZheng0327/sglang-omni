@@ -33,13 +33,32 @@ def _pad1d(x: torch.Tensor, left: int, right: int, mode: str) -> torch.Tensor:
     return functional.pad(x, (left, right), mode=mode)
 
 
+class StreamingModule(nn.Module):
+    """A module that also runs chunk by chunk, over state the caller owns.
+
+    Stateless modules inherit these defaults, so a stack of them needs no test
+    for which of its members carry state.
+    """
+
+    def init_state(self):
+        return None
+
+    def step(self, x: torch.Tensor, state):
+        return self(x)
+
+
+class ELU(StreamingModule):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return functional.elu(x)
+
+
 @dataclass
 class ConvState:
     previous: torch.Tensor | None = None
     padded: bool = False
 
 
-class CausalConv1d(nn.Module):
+class CausalConv1d(StreamingModule):
     """Conv1d with left padding of ``effective_kernel - stride`` samples.
 
     The whole-sequence path also pads on the right so the last window is
@@ -124,7 +143,7 @@ class ConvTransposeState:
     partial: torch.Tensor | None = None
 
 
-class CausalConvTranspose1d(nn.Module):
+class CausalConvTranspose1d(StreamingModule):
     """ConvTranspose1d whose ``kernel - stride`` trailing outputs are trimmed.
 
     Chunk by chunk those trailing outputs are not dropped but held back: the

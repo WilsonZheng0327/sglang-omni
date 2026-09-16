@@ -81,7 +81,6 @@ class PersonaPlexForCausalLM(nn.Module):
         dtype = torch.get_default_dtype()
         device = self.text_emb.weight.device
         self._fusion_buffer = torch.zeros(max_batch, dim, dtype=dtype, device=device)
-        self._fusion_mask = torch.zeros(max_batch, dtype=torch.bool, device=device)
         self._hidden_out = torch.zeros(max_batch, dim, dtype=dtype, device=device)
 
     def get_attention_sliding_window_size(self) -> int:
@@ -100,12 +99,7 @@ class PersonaPlexForCausalLM(nn.Module):
 
     def forward(self, input_ids, positions, forward_batch, input_embeds=None, **_):
         if input_embeds is None:
-            batch = input_ids.shape[0]
-            assert bool(
-                self._fusion_mask[:batch].all()
-            ), "PersonaPlex decode step reached the model without fused inputs"
-            input_embeds = self._fusion_buffer[:batch]
-            self._fusion_mask[:batch] = False
+            input_embeds = self._fusion_buffer[: input_ids.shape[0]]
         hidden = self.llm.model(input_ids, positions, forward_batch, input_embeds)
         if forward_batch.forward_mode.is_decode():
             self._hidden_out[: hidden.shape[0]] = hidden
