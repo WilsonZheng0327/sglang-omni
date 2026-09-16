@@ -873,7 +873,7 @@ that happened to contain an older version of the test.
 - `unit_test/personaplex/`: PersonaPlex delayed-timeline contract (stream
   delays, prompt phases, packaged-voice rows and the first generative
   position), chunked Mimi equivalence with whole-sequence encode/decode on
-  random weights, depformer per-step weight slicing and teacher forcing, the
+  random weights and the ring cache's oldest-entry drop, depformer per-step weight slicing and teacher forcing, the
   Llama-shaped backbone config and checkpoint shim, checkpoint weight routing
   and embedding columns, model-runner prefill/decode rows and frame handoff,
   per-request streaming code2wav and abort cleanup, preprocessing (caller

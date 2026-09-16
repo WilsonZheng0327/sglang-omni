@@ -1,13 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Chunked Mimi must land on the samples a whole-sequence pass produces."""
 
+from dataclasses import replace
+
 import torch
 
+from sglang_omni.models.personaplex.architecture import MIMI
 from sglang_omni.models.personaplex.components.causal_conv import (
     CausalConv1d,
     CausalConvTranspose1d,
 )
-from sglang_omni.models.personaplex.components.mimi import MimiCodec, rename_mimi_key
+from sglang_omni.models.personaplex.components.mimi import (
+    AttentionState,
+    MimiAttention,
+    MimiCodec,
+    MimiTransformer,
+    rename_mimi_key,
+)
 
 
 def _random_codec() -> MimiCodec:
@@ -98,3 +107,64 @@ def test_checkpoint_names_map_onto_the_module_tree():
         rename_mimi_key("quantizer.rvq_rest.vq.layers.7._codebook.embedding_sum")
         is None
     )
+
+
+SMALL = replace(MIMI, context=6, num_layers=2, dim=16, num_heads=2, ffn_dim=8)
+
+
+def _small_transformer() -> MimiTransformer:
+    torch.manual_seed(4)
+    transformer = MimiTransformer(SMALL).eval()
+    with torch.no_grad():
+        for parameter in transformer.parameters():
+            parameter.normal_(std=0.2)
+    return transformer
+
+
+def _influenced_steps(chunk: int) -> list[int]:
+    """Which steps still depend on step 0, feeding ``chunk`` steps at a time."""
+    torch.manual_seed(0)
+    attention = MimiAttention(dim=8, num_heads=2, context=SMALL.context, max_period=1e4)
+    with torch.no_grad():
+        attention.in_proj_weight.normal_()
+        attention.out_proj.weight.normal_()
+    x = torch.randn(1, 4 * SMALL.context, 8)
+    changed = x.clone()
+    changed[:, 0] += 1.0
+
+    def run(inp):
+        state = AttentionState()
+        with torch.no_grad():
+            parts = [
+                attention(inp[:, t : t + chunk], offset=t, state=state)
+                for t in range(0, inp.shape[1], chunk)
+            ]
+        return torch.cat(parts, 1)
+
+    differs = (run(x) - run(changed)).abs().amax(dim=(0, 2)) > 1e-6
+    return differs.nonzero().flatten().tolist()
+
+
+def test_the_ring_drops_its_oldest_step_as_the_reference_does():
+    """The reference labels the slot it is about to overwrite as a future position,
+    so once the ring is full its oldest entry leaves the window."""
+    assert _influenced_steps(1) == list(range(SMALL.context - 1))
+    assert _influenced_steps(SMALL.frame_ratio) == list(
+        range(SMALL.context - SMALL.frame_ratio)
+    )
+
+
+def test_whole_sequence_matches_the_streaming_replay_past_the_ring():
+    transformer = _small_transformer()
+    x = torch.randn(1, SMALL.dim, 3 * SMALL.context + 1)
+    state = transformer.init_state()
+    with torch.no_grad():
+        whole = transformer(x)
+        chunked = torch.cat(
+            [
+                transformer.step(x[..., t : t + SMALL.frame_ratio], state)
+                for t in range(0, x.shape[-1], SMALL.frame_ratio)
+            ],
+            -1,
+        )
+    torch.testing.assert_close(whole, chunked, atol=1e-6, rtol=1e-5)

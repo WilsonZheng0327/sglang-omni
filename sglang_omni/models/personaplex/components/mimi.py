@@ -22,8 +22,10 @@ from torch.nn import functional
 
 from sglang_omni.models.personaplex.architecture import MIMI, MimiSpec
 from sglang_omni.models.personaplex.components.causal_conv import (
+    ELU,
     CausalConv1d,
     CausalConvTranspose1d,
+    StreamingModule,
 )
 
 
@@ -55,9 +57,11 @@ def apply_interleaved_rope(
 
 @dataclass
 class AttentionState:
+    """The reference's ring cache: a fixed buffer written modulo its capacity."""
+
     keys: torch.Tensor | None = None
     values: torch.Tensor | None = None
-    positions: torch.Tensor | None = None
+    end_offset: int = 0
 
 
 class MimiAttention(nn.Module):
@@ -79,19 +83,41 @@ class MimiAttention(nn.Module):
         )
         pos_q = offset + torch.arange(length, device=x.device)
         q, k = apply_interleaved_rope(q, k, pos_q, self.max_period)
-        pos_k = pos_q
+        pos_k = pos_q if state is None else self._write_ring(k, v, state)
         if state is not None:
-            if state.keys is not None:
-                k = torch.cat([state.keys, k], dim=2)
-                v = torch.cat([state.values, v], dim=2)
-                pos_k = torch.cat([state.positions, pos_q])
-            keep = max(self.context - 1, 0)
-            state.keys, state.values = k[:, :, -keep:], v[:, :, -keep:]
-            state.positions = pos_k[-keep:]
+            k, v = state.keys, state.values
         delta = pos_q.view(-1, 1) - pos_k.view(1, -1)
-        mask = (delta >= 0) & (delta < self.context)
+        mask = (pos_k.view(1, -1) >= 0) & (delta >= 0) & (delta < self.context)
         out = functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         return self.out_proj(rearrange(out, "b h t d -> b t (h d)"))
+
+    def _write_ring(self, k, v, state: AttentionState) -> torch.Tensor:
+        """Store this step in the ring and label every slot as the reference does.
+
+        The slot about to be overwritten is labelled as a future position, so
+        once the ring is full its oldest entry falls outside the window. Reading
+        the buffer in ring order is what keeps results bit-identical to the
+        reference, and is why long inputs replay this path step by step.
+        """
+        capacity = self.context
+        if state.keys is None:
+            shape = (k.shape[0], k.shape[1], capacity, k.shape[3])
+            state.keys, state.values = k.new_zeros(shape), v.new_zeros(shape)
+        slots = torch.arange(k.shape[2], device=k.device) + state.end_offset
+        state.keys.index_copy_(2, slots % capacity, k)
+        state.values.index_copy_(2, slots % capacity, v)
+        state.end_offset += k.shape[2]
+
+        indexes = torch.arange(capacity, device=k.device)
+        delta = indexes - state.end_offset % capacity
+        positions = torch.where(
+            delta <= 0,
+            state.end_offset + delta,
+            state.end_offset + delta - capacity,
+        )
+        return torch.where(
+            indexes >= state.end_offset, torch.full_like(positions, -1), positions
+        )
 
 
 class LayerScale(nn.Module):
@@ -133,16 +159,29 @@ class TransformerState:
     layers: list[AttentionState] = field(default_factory=list)
 
 
-class MimiTransformer(nn.Module):
+class MimiTransformer(StreamingModule):
     """Eight layers over ``[B, C, T]`` frames at the SEANet rate (25 Hz)."""
 
     def __init__(self, spec: MimiSpec) -> None:
         super().__init__()
+        self.spec = spec
         self.layers = nn.ModuleList(
             MimiTransformerLayer(spec) for _ in range(spec.num_layers)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Note (wilsonzheng0327): Past the ring's capacity the result depends on the
+        # reference's key order and chunking, so a long input replays the streaming path.
+        if x.shape[-1] > self.spec.context:
+            state = self.init_state()
+            chunk = max(self.spec.frame_ratio, 1)
+            return torch.cat(
+                [
+                    self.step(x[..., t : t + chunk], state)
+                    for t in range(0, x.shape[-1], chunk)
+                ],
+                -1,
+            )
         x = x.transpose(1, 2)
         for layer in self.layers:
             x = layer(x)
@@ -159,7 +198,7 @@ class MimiTransformer(nn.Module):
         return x.transpose(1, 2)
 
 
-class SEANetResnetBlock(nn.Module):
+class SEANetResnetBlock(StreamingModule):
     def __init__(
         self, dim: int, kernel_size: int, dilation: int, compress: int
     ) -> None:
@@ -167,9 +206,9 @@ class SEANetResnetBlock(nn.Module):
         hidden = dim // compress
         self.block = nn.ModuleList(
             [
-                nn.ELU(),
+                ELU(),
                 CausalConv1d(dim, hidden, kernel_size, dilation=dilation),
-                nn.ELU(),
+                ELU(),
                 CausalConv1d(hidden, dim, 1),
             ]
         )
@@ -181,9 +220,7 @@ class SEANetResnetBlock(nn.Module):
         return x + y
 
     def init_state(self) -> list:
-        return [
-            m.init_state() if isinstance(m, CausalConv1d) else None for m in self.block
-        ]
+        return _stack_state(self.block)
 
     def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
         y = x
@@ -200,16 +237,16 @@ def _run_stack(modules: nn.ModuleList, x: torch.Tensor) -> torch.Tensor:
 
 
 def _stack_state(modules: nn.ModuleList) -> list:
-    return [m.init_state() if hasattr(m, "init_state") else None for m in modules]
+    return [m.init_state() for m in modules]
 
 
 def _step_stack(modules: nn.ModuleList, x: torch.Tensor, state: list) -> torch.Tensor:
     for module, module_state in zip(modules, state, strict=True):
-        x = module.step(x, module_state) if module_state is not None else module(x)
+        x = module.step(x, module_state)
     return x
 
 
-class SEANetEncoder(nn.Module):
+class SEANetEncoder(StreamingModule):
     """Waveform ``[B, 1, T]`` → latent ``[B, dim, T / hop_length]``."""
 
     def __init__(self, spec: MimiSpec) -> None:
@@ -223,10 +260,10 @@ class SEANetEncoder(nn.Module):
             layers.append(
                 SEANetResnetBlock(channels, spec.residual_kernel_size, 1, spec.compress)
             )
-            layers.append(nn.ELU())
+            layers.append(ELU())
             layers.append(CausalConv1d(channels, channels * 2, ratio * 2, stride=ratio))
             mult *= 2
-        layers.append(nn.ELU())
+        layers.append(ELU())
         layers.append(
             CausalConv1d(mult * spec.n_filters, spec.dim, spec.last_kernel_size)
         )
@@ -242,7 +279,7 @@ class SEANetEncoder(nn.Module):
         return _step_stack(self.model, x, state)
 
 
-class SEANetDecoder(nn.Module):
+class SEANetDecoder(StreamingModule):
     """Latent ``[B, dim, F]`` → waveform ``[B, 1, F * hop_length]``."""
 
     def __init__(self, spec: MimiSpec) -> None:
@@ -253,7 +290,7 @@ class SEANetDecoder(nn.Module):
         ]
         for ratio in spec.ratios:
             channels = mult * spec.n_filters
-            layers.append(nn.ELU())
+            layers.append(ELU())
             layers.append(
                 CausalConvTranspose1d(channels, channels // 2, ratio * 2, stride=ratio)
             )
@@ -263,7 +300,7 @@ class SEANetDecoder(nn.Module):
                 )
             )
             mult //= 2
-        layers.append(nn.ELU())
+        layers.append(ELU())
         layers.append(CausalConv1d(spec.n_filters, 1, spec.last_kernel_size))
         self.model = nn.ModuleList(layers)
 

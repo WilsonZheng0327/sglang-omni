@@ -71,6 +71,7 @@ def preprocess(monkeypatch, tmp_path):
 def test_caller_is_channel_zero_padded_to_whole_frames(preprocess):
     state = preprocess()
     waveform = state.waveform
+    assert state.num_samples == CALLER_SAMPLES
     assert waveform.shape[-1] % SAMPLES_PER_FRAME == 0
     assert waveform.shape[-1] == SAMPLES_PER_FRAME * 2
     assert torch.all(waveform[:CALLER_SAMPLES] == 0.5)
@@ -136,3 +137,30 @@ def test_engine_context_length_reaches_the_builder(monkeypatch):
 
     stages.create_lm_executor("m", context_length=4096)
     assert built["context_length"] == 4096 and built["overrides"] is None
+
+
+def test_whole_reply_decode_is_cut_back_to_the_caller_length(monkeypatch):
+    frames, samples_per_frame = 4, SAMPLES_PER_FRAME
+    num_samples = 3 * samples_per_frame + 7
+
+    class _Codec:
+        device = "cpu"
+
+        def decode(self, codes_BKF):
+            return torch.arange(float(codes_BKF.shape[-1] * samples_per_frame)).view(
+                1, 1, -1
+            )
+
+    monkeypatch.setattr(stages, "_codec", lambda *a, **k: (_Codec(), "cpu"))
+    scheduler = stages.create_code2wav_executor("m")
+    state = PersonaPlexState(
+        num_samples=num_samples, codes=torch.zeros(frames, 8, dtype=torch.long)
+    )
+    payload = StagePayload(
+        "r", request=OmniRequest(inputs={}, params={}), data=state.to_dict()
+    )
+    rendered = np.frombuffer(
+        scheduler._fn(payload).data["audio_waveform"], dtype=np.float32
+    )
+    assert rendered.shape[-1] == num_samples
+    assert rendered[-1] == num_samples - 1
