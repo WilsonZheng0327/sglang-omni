@@ -3,6 +3,7 @@
 
 from dataclasses import replace
 
+import pytest
 import torch
 
 from sglang_omni.models.personaplex.architecture import MIMI
@@ -17,19 +18,6 @@ from sglang_omni.models.personaplex.components.mimi import (
     MimiTransformer,
     rename_mimi_key,
 )
-
-
-def _random_codec() -> MimiCodec:
-    torch.manual_seed(0)
-    codec = MimiCodec().eval()
-    with torch.no_grad():
-        for parameter in codec.parameters():
-            parameter.normal_(std=0.05)
-        for module in codec.modules():
-            if hasattr(module, "embedding_sum"):
-                module.embedding_sum.normal_()
-                module.cluster_usage.fill_(1.0)
-    return codec
 
 
 def test_causal_conv_chunks_match_whole():
@@ -61,8 +49,8 @@ def test_causal_conv_transpose_chunks_match_whole():
         torch.testing.assert_close(torch.cat(chunks, -1), whole, atol=1e-6, rtol=1e-5)
 
 
-def test_codec_encode_and_decode_step_match_whole():
-    codec = _random_codec()
+def test_codec_encode_and_decode_step_match_whole(random_codec):
+    codec = random_codec
     frames = 5
     x = torch.randn(1, 1, codec.samples_per_frame * frames)
     codes = codec.encode(x)
@@ -154,9 +142,12 @@ def test_the_ring_drops_its_oldest_step_as_the_reference_does():
     )
 
 
-def test_whole_sequence_matches_the_streaming_replay_past_the_ring():
+@pytest.mark.parametrize(
+    "length", [SMALL.context - 1, SMALL.context, 3 * SMALL.context + 1]
+)
+def test_whole_sequence_matches_the_streaming_replay(length):
     transformer = _small_transformer()
-    x = torch.randn(1, SMALL.dim, 3 * SMALL.context + 1)
+    x = torch.randn(1, SMALL.dim, length)
     state = transformer.init_state()
     with torch.no_grad():
         whole = transformer(x)

@@ -85,7 +85,12 @@ def test_prefill_uses_stored_voice_rows_and_embeds_the_rest():
     total = voice_timeline.num_prompt_positions + plain_timeline.num_prompt_positions
     forward_batch = SimpleNamespace(replace_embeds=None, input_ids=torch.zeros(total))
 
-    runner.before_prefill(forward_batch, None, [with_voice, without_voice])
+    fresh = SimpleNamespace(output_ids=[])
+    runner.before_prefill(
+        forward_batch,
+        SimpleNamespace(reqs=[fresh, fresh]),
+        [with_voice, without_voice],
+    )
 
     inputs = get_omni_prefill_inputs(forward_batch)
     assert inputs.input_embeds_are_projected

@@ -11,23 +11,9 @@ from sglang_omni.models.personaplex.code2wav_stream import (
     PersonaPlexCode2WavScheduler,
     trim_to_caller,
 )
-from sglang_omni.models.personaplex.components.mimi import MimiCodec
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.proto import StagePayload
 from sglang_omni.proto.request import OmniRequest
-
-
-def _random_codec() -> MimiCodec:
-    torch.manual_seed(0)
-    codec = MimiCodec().eval()
-    with torch.no_grad():
-        for parameter in codec.parameters():
-            parameter.normal_(std=0.05)
-        for module in codec.modules():
-            if hasattr(module, "embedding_sum"):
-                module.embedding_sum.normal_()
-                module.cluster_usage.fill_(1.0)
-    return codec
 
 
 def _waveform(payload: dict) -> torch.Tensor:
@@ -37,16 +23,17 @@ def _waveform(payload: dict) -> torch.Tensor:
     )
 
 
-def _start(scheduler, request_id: str, num_samples: int = 0) -> StagePayload:
-    data = PersonaPlexState(num_samples=num_samples).to_dict()
-    payload = StagePayload(request_id, request=OmniRequest(inputs={}), data=data)
+def _start(scheduler, request_id: str) -> StagePayload:
+    payload = StagePayload(
+        request_id, request=OmniRequest(inputs={}), data=PersonaPlexState().to_dict()
+    )
     scheduler._stream_payloads[request_id] = payload
     scheduler.on_streaming_new_request(request_id, payload)
     return payload
 
 
-def test_interleaved_requests_stream_their_own_waveforms():
-    codec = _random_codec()
+def test_interleaved_requests_stream_their_own_waveforms(random_codec):
+    codec = random_codec
     scheduler = PersonaPlexCode2WavScheduler(codec, compute_fn=lambda payload: payload)
     codes = {
         "a": torch.randint(0, 2048, (4, 8), generator=torch.Generator().manual_seed(1)),
@@ -58,7 +45,9 @@ def test_interleaved_requests_stream_their_own_waveforms():
     streamed = {rid: [] for rid in codes}
 
     def push(rid: str, chunk: torch.Tensor) -> None:
-        (message,) = scheduler.on_stream_chunk(rid, SimpleNamespace(data=chunk))
+        (message,) = scheduler.on_stream_chunk(
+            rid, SimpleNamespace(data=chunk, metadata=None)
+        )
         assert message.type == "stream"
         streamed[rid].append(_waveform(message.data))
 
@@ -79,9 +68,9 @@ def test_interleaved_requests_stream_their_own_waveforms():
         )
 
 
-def test_abort_clears_stream_state():
+def test_abort_clears_stream_state(random_codec):
     scheduler = PersonaPlexCode2WavScheduler(
-        _random_codec(), compute_fn=lambda payload: payload
+        random_codec, compute_fn=lambda payload: payload
     )
     payload = _start(scheduler, "a")
     assert scheduler.is_streaming_payload(payload)
@@ -90,8 +79,8 @@ def test_abort_clears_stream_state():
     assert scheduler.on_stream_done("never-started") == []
 
 
-def test_reply_is_cut_back_to_the_caller_recording_length():
-    codec = _random_codec()
+def test_reply_is_cut_back_to_the_caller_recording_length(random_codec):
+    codec = random_codec
     scheduler = PersonaPlexCode2WavScheduler(codec, compute_fn=lambda payload: payload)
     frames, samples_per_frame = 4, codec.samples_per_frame
     num_samples = 3 * samples_per_frame + 100
@@ -99,21 +88,28 @@ def test_reply_is_cut_back_to_the_caller_recording_length():
         0, 2048, (frames, 8), generator=torch.Generator().manual_seed(3)
     )
     whole = codec.decode(codes.T[None])[0, 0]
-    _start(scheduler, "a", num_samples=num_samples)
+    assert whole.shape[-1] == frames * samples_per_frame
 
     streamed = []
     for frame in range(frames):
         (message,) = scheduler.on_stream_chunk(
-            "a", SimpleNamespace(data=codes[frame : frame + 1])
+            "a",
+            SimpleNamespace(
+                data=codes[frame : frame + 1], metadata={"num_samples": num_samples}
+            ),
         )
         streamed.append(_waveform(message.data))
-    (result,) = scheduler.on_stream_done("a")
+    torch.testing.assert_close(
+        torch.cat(streamed), whole[:num_samples], atol=1e-5, rtol=1e-5
+    )
+    assert streamed[-1].shape[-1] == 100
 
-    assert whole.shape[-1] == frames * samples_per_frame
+    # Note (wilsonzheng0327): The terminal payload lands after every chunk, as it does
+    # when the LM stage finishes.
+    _start(scheduler, "a")
+    (result,) = scheduler.on_stream_done("a")
     reply = _waveform(result.data.data)
-    assert reply.shape[-1] == num_samples
     torch.testing.assert_close(reply, whole[:num_samples], atol=1e-5, rtol=1e-5)
-    assert torch.cat(streamed).shape[-1] == num_samples
 
 
 def test_trim_leaves_whole_frame_replies_alone():

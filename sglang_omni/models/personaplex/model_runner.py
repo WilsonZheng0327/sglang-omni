@@ -135,12 +135,11 @@ class PersonaPlexModelRunner(ModelRunner):
         return model.embed_rows(rows).to(model._fusion_buffer.dtype)
 
     def before_prefill(self, forward_batch, schedule_batch, requests) -> None:
-        reqs = schedule_batch.reqs if schedule_batch is not None else requests
         rows = []
-        for request, req in zip(requests, reqs, strict=True):
+        for request, req in zip(requests, schedule_batch.reqs, strict=True):
             data = request.data
             inputs = data.talker_model_inputs
-            generated = [int(token) for token in getattr(req, "output_ids", []) or []]
+            generated = [int(token) for token in req.output_ids]
             prompt_rows = self._prefill_rows(data)
             if not generated:
                 inputs["prefill_forced"] = self._timeline(
