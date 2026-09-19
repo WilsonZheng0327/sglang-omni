@@ -45,7 +45,7 @@ class PersonaPlexModelRunner(ModelRunner):
 
     @property
     def _device(self) -> torch.device:
-        return self.model._fusion_buffer.device
+        return self.model.fusion_buffer.device
 
     @staticmethod
     def _timeline(data) -> Timeline:
@@ -68,7 +68,7 @@ class PersonaPlexModelRunner(ModelRunner):
         timeline = self._timeline(data)
         model = self.model
         tokens = timeline.prefill_tokens.to(self._device)
-        dtype = model._fusion_buffer.dtype
+        dtype = model.fusion_buffer.dtype
         if not timeline.prefill_embedding_positions:
             return model.embed_rows(tokens).to(dtype)
         stored = torch.as_tensor(timeline.prefill_embeddings, device=self._device).to(
@@ -100,7 +100,7 @@ class PersonaPlexModelRunner(ModelRunner):
         data = request.data
         inputs = data.talker_model_inputs
         device_rows = self._rows_to_device(data)
-        hidden = self.model._hidden_out[index : index + 1]
+        hidden = self.model.hidden_out[index : index + 1]
         codes = self.model.depformer.generate(
             text_token.view(1), hidden, forced.view(1, -1), self._audio_sampler(data)
         )[0]
@@ -132,7 +132,7 @@ class PersonaPlexModelRunner(ModelRunner):
             rows[index, 0] = int(token)
             rows[index, AGENT_STREAM_OFFSET:USER_STREAM_OFFSET] = agent_rows[index]
             rows[index, USER_STREAM_OFFSET:] = device_rows["user_rows"][start + index]
-        return model.embed_rows(rows).to(model._fusion_buffer.dtype)
+        return model.embed_rows(rows).to(model.fusion_buffer.dtype)
 
     def before_prefill(self, forward_batch, schedule_batch, requests) -> None:
         rows = []
@@ -164,7 +164,6 @@ class PersonaPlexModelRunner(ModelRunner):
         )
 
     def post_prefill(self, result, forward_batch, schedule_batch, requests) -> None:
-        del forward_batch, schedule_batch
         sampled = result.next_token_ids
         for index, request in enumerate(requests):
             inputs = request.data.talker_model_inputs
@@ -178,7 +177,6 @@ class PersonaPlexModelRunner(ModelRunner):
     def before_decode(
         self, forward_batch, schedule_batch, requests, *, is_lookahead=False
     ) -> None:
-        del forward_batch, is_lookahead
         model = self.model
         rows = []
         for request, req in zip(requests, schedule_batch.reqs, strict=True):
@@ -192,12 +190,11 @@ class PersonaPlexModelRunner(ModelRunner):
             row[USER_STREAM_OFFSET:] = device_rows["user_rows"][position]
             rows.append(row)
         batch = len(rows)
-        model._fusion_buffer[:batch] = model.embed_rows(torch.stack(rows)).to(
-            model._fusion_buffer.dtype
+        model.fusion_buffer[:batch] = model.embed_rows(torch.stack(rows)).to(
+            model.fusion_buffer.dtype
         )
 
     def post_decode(self, result, forward_batch, schedule_batch, requests) -> None:
-        del forward_batch, schedule_batch
         sampled = result.next_token_ids
         free = self._free_codes()
         for index, request in enumerate(requests):

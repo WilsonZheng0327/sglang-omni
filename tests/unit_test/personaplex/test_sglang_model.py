@@ -16,7 +16,7 @@ from sglang_omni.models.personaplex.architecture import (
 )
 from sglang_omni.models.personaplex.sglang_model import (
     PersonaPlexForCausalLM,
-    _backbone_weight,
+    backbone_weight,
 )
 
 DIM = 4
@@ -25,7 +25,7 @@ DIM = 4
 def test_backbone_tensors_map_onto_llama_names():
     in_proj = torch.arange(12.0).view(6, 2)
     mapped = dict(
-        _backbone_weight("transformer.layers.3.self_attn.in_proj_weight", in_proj)
+        backbone_weight("transformer.layers.3.self_attn.in_proj_weight", in_proj)
     )
     q, k, v = in_proj.chunk(3)
     assert torch.equal(mapped["model.layers.3.self_attn.q_proj.weight"], q)
@@ -34,21 +34,21 @@ def test_backbone_tensors_map_onto_llama_names():
 
     linear_in = torch.arange(8.0).view(4, 2)
     mapped = dict(
-        _backbone_weight("transformer.layers.0.gating.linear_in.weight", linear_in)
+        backbone_weight("transformer.layers.0.gating.linear_in.weight", linear_in)
     )
     assert torch.equal(mapped["model.layers.0.mlp.gate_proj.weight"], linear_in[:2])
     assert torch.equal(mapped["model.layers.0.mlp.up_proj.weight"], linear_in[2:])
 
     alpha = torch.ones(1, 1, DIM)
-    ((name, tensor),) = _backbone_weight("transformer.layers.1.norm2.alpha", alpha)
+    ((name, tensor),) = backbone_weight("transformer.layers.1.norm2.alpha", alpha)
     assert name == "model.layers.1.post_attention_layernorm.weight"
     assert tensor.shape == (DIM,)
-    ((name, _),) = _backbone_weight(
+    ((name, _),) = backbone_weight(
         "transformer.layers.1.self_attn.out_proj.weight", torch.zeros(DIM, DIM)
     )
     assert name == "model.layers.1.self_attn.o_proj.weight"
     with pytest.raises(KeyError):
-        list(_backbone_weight("transformer.layers.1.unknown.weight", alpha))
+        list(backbone_weight("transformer.layers.1.unknown.weight", alpha))
 
 
 def _fake_model() -> SimpleNamespace:

@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Turns a stage payload into an SGLang request, and the result back into one."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -33,7 +35,7 @@ from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestDa
 SEED_NAMESPACE = "personaplex"
 # Note (wilsonzheng0327): The client fills these into every request, so a value equal
 # to one of them only counts when the caller listed the field as explicit.
-_CLIENT_FILLER_VALUES = {"temperature": 1.0, "top_k": -1}
+CLIENT_FILLER_VALUES = {"temperature": 1.0, "top_k": -1}
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,7 @@ def _text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
         value = params.get(key)
         if value is None:
             continue
-        if not explicit and value == _CLIENT_FILLER_VALUES[key]:
+        if not explicit and value == CLIENT_FILLER_VALUES[key]:
             continue
         return cast(value)
     return default
@@ -239,7 +241,6 @@ def apply_lm_result(data: SGLangARRequestData) -> StagePayload:
 def lm_stream_output_builder(
     request_id: str, data: SGLangARRequestData, req_output
 ) -> list[OutgoingMessage]:
-    del req_output
     pending = data.talker_model_inputs.get("pending_frames")
     if not pending:
         return []

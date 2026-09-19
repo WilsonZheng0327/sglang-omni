@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The PersonaPlex pipeline: five stages on one GPU, the LM under SGLang."""
+
 from typing import ClassVar
 
 from pydantic import Field

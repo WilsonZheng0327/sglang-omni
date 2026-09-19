@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+"""The state one PersonaPlex request carries from stage to stage."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

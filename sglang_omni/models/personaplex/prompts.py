@@ -14,8 +14,10 @@ import math
 import shutil
 import tarfile
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -28,11 +30,14 @@ from sglang_omni.models.personaplex.architecture import (
 )
 from sglang_omni.models.personaplex.timeline import voice_tail_codes_from_cache
 
+if TYPE_CHECKING:
+    from sentencepiece import SentencePieceProcessor
+
 TEXT_TOKENIZER_NAME = "tokenizer_spm_32k_3.model"
 VOICES_ARCHIVE_NAME = "voices.tgz"
 VOICES_DIR_NAME = "voices"
 VOICE_PROMPT_TARGET_LUFS = -24.0
-_VOICE_SUFFIXES = (".pt", ".wav", ".flac", ".mp3", ".ogg")
+VOICE_SUFFIXES = (".pt", ".wav", ".flac", ".mp3", ".ogg")
 
 DEFAULT_TEXT_PROMPT = (
     "You are a wise and friendly teacher. Answer questions or provide advice "
@@ -41,7 +46,7 @@ DEFAULT_TEXT_PROMPT = (
 DEFAULT_VOICE = "NATF2"
 
 
-def load_text_tokenizer(model_dir: str | Path):
+def load_text_tokenizer(model_dir: str | Path) -> SentencePieceProcessor:
     import sentencepiece
 
     path = Path(model_dir) / TEXT_TOKENIZER_NAME
@@ -57,13 +62,15 @@ def wrap_system_tags(text: str) -> str:
     return f"{SYSTEM_TAG} {cleaned} {SYSTEM_TAG}"
 
 
-def tokenize_text_prompt(tokenizer, text: str | None) -> list[int]:
+def tokenize_text_prompt(
+    tokenizer: SentencePieceProcessor, text: str | None
+) -> list[int]:
     if not text or not text.strip():
         return []
     return [int(i) for i in tokenizer.encode(wrap_system_tags(text))]
 
 
-def decode_text(tokenizer, token_ids: list[int]) -> str:
+def decode_text(tokenizer: SentencePieceProcessor, token_ids: list[int]) -> str:
     """Spoken words only; the frame-locked markers (PAD, EPAD, BOS, EOS) are dropped."""
     spoken = [int(i) for i in token_ids if int(i) not in TEXT_MARKER_IDS]
     return tokenizer.decode(spoken) if spoken else ""
@@ -142,7 +149,7 @@ def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
     folder = voices_dir(model_dir)
     candidates = [
         folder / voice,
-        *(folder / f"{voice}{suffix}" for suffix in _VOICE_SUFFIXES),
+        *(folder / f"{voice}{suffix}" for suffix in VOICE_SUFFIXES),
     ]
     for candidate in candidates:
         if candidate.is_file():
@@ -173,7 +180,9 @@ def pad_to_whole_frames(waveform: torch.Tensor) -> torch.Tensor:
     return waveform
 
 
-def load_voice_prompt(path: str | Path, *, load_audio) -> VoicePrompt:
+def load_voice_prompt(
+    path: str | Path, *, load_audio: Callable[[str], np.ndarray]
+) -> VoicePrompt:
     """load_audio(path) must return the recording as [channels, samples]
     float at 24 kHz; only the first channel is the voice."""
     path = Path(path)

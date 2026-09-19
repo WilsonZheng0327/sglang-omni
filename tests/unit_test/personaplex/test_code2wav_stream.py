@@ -27,7 +27,7 @@ def _start(scheduler, request_id: str) -> StagePayload:
     payload = StagePayload(
         request_id, request=OmniRequest(inputs={}), data=PersonaPlexState().to_dict()
     )
-    scheduler._stream_payloads[request_id] = payload
+    scheduler.stream_payloads[request_id] = payload
     scheduler.on_streaming_new_request(request_id, payload)
     return payload
 

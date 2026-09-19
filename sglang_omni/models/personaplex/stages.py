@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Stage factories: preprocessing, Mimi encode, the LM engine, decode and code2wav."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from sglang_omni.models.personaplex.architecture import MIMI_WEIGHTS_GLOB, SAMPLE_RATE
@@ -11,6 +14,7 @@ from sglang_omni.models.personaplex.code2wav_stream import (
     trim_to_caller,
 )
 from sglang_omni.models.personaplex.components.mimi import (
+    MimiCodec,
     load_mimi_codec,
     resolve_mimi_weights,
 )
@@ -20,6 +24,7 @@ from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.prompts import (
     DEFAULT_TEXT_PROMPT,
     DEFAULT_VOICE,
+    VoicePrompt,
     decode_text,
     load_text_tokenizer,
     load_voice_prompt,
@@ -37,14 +42,14 @@ from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.device import resolve_concrete_device
 
 
-def _load_channels(source, *, source_name: str):
+def _load_channels(source: str | bytes, *, source_name: str) -> np.ndarray:
     """Any sample rate in, [channels, samples] float32 at 24 kHz out."""
     return load_audio(
         source, source_name=source_name, target_sample_rate=SAMPLE_RATE, mono=False
     )
 
 
-def _caller_audio_source(payload: StagePayload):
+def _caller_audio_source(payload: StagePayload) -> str | bytes:
     """The caller recording: an audio_path-style input, or the one entry of
     audios that chat completions sends."""
     inputs = payload.request.inputs
@@ -65,10 +70,10 @@ def _request_text_prompt(params: dict) -> str | None:
     return DEFAULT_TEXT_PROMPT
 
 
-def create_preprocessing_executor(model_path: str, **_):
+def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
     model_dir = Path(resolve_model_path(model_path))
     tokenizer = load_text_tokenizer(model_dir)
-    voice_cache: dict[Path, object] = {}
+    voice_cache: dict[Path, VoicePrompt] = {}
 
     def preprocess(payload: StagePayload) -> StagePayload:
         params = stage_request_params(payload.request.params, PREPROCESSING_STAGE)
@@ -108,16 +113,17 @@ def create_preprocessing_executor(model_path: str, **_):
     return SimpleScheduler(preprocess)
 
 
-def _codec(model_path: str, *, device, gpu_id):
+def _codec(
+    model_path: str, *, device: str | None, gpu_id: int | None
+) -> tuple[MimiCodec, torch.device]:
     device = resolve_concrete_device(device, gpu_id)
     weights = resolve_mimi_weights(resolve_model_path(model_path), MIMI_WEIGHTS_GLOB)
     return load_mimi_codec(weights, device=device), device
 
 
 def create_mimi_encode_executor(
-    model_path: str, *, dtype=None, device=None, gpu_id=None, **_
-):
-    del dtype  # Note (wilsonzheng0327): Mimi runs in float32, as the reference does.
+    model_path: str, *, device: str | None = None, gpu_id: int | None = None, **_
+) -> SimpleScheduler:
     codec, device = _codec(model_path, device=device, gpu_id=gpu_id)
 
     def encode_waveform(waveform: torch.Tensor) -> torch.Tensor:
@@ -139,14 +145,14 @@ def create_mimi_encode_executor(
 
 
 def create_lm_executor(
-    model_path,
+    model_path: str,
     *,
-    dtype=None,
-    device=None,
-    gpu_id=None,
-    context_length=None,
-    server_args_overrides=None,
-    **overrides,
+    dtype: str | None = None,
+    device: str | None = None,
+    gpu_id: int | None = None,
+    context_length: int | None = None,
+    server_args_overrides: dict[str, object] | None = None,
+    **overrides: object,
 ):
     server_args_overrides = {**overrides, **(server_args_overrides or {})}
     # Note (wilsonzheng0327): The shim config is written before the engine reads its
@@ -164,7 +170,7 @@ def create_lm_executor(
     )
 
 
-def create_decode_executor(model_path: str, **_):
+def create_decode_executor(model_path: str, **_) -> SimpleScheduler:
     """Turn the frame-locked text stream into the reply text."""
     tokenizer = load_text_tokenizer(resolve_model_path(model_path))
 
@@ -177,9 +183,8 @@ def create_decode_executor(model_path: str, **_):
 
 
 def create_code2wav_executor(
-    model_path: str, *, dtype=None, device=None, gpu_id=None, **_
-):
-    del dtype
+    model_path: str, *, device: str | None = None, gpu_id: int | None = None, **_
+) -> PersonaPlexCode2WavScheduler:
     codec, device = _codec(model_path, device=device, gpu_id=gpu_id)
 
     @torch.inference_mode()

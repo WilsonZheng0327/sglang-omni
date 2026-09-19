@@ -31,7 +31,7 @@ from sglang_omni.models.personaplex.components.depformer import Depformer
 BACKBONE_LAYER_PREFIX = "transformer.layers."
 
 
-def _backbone_weight(name: str, tensor: torch.Tensor):
+def backbone_weight(name: str, tensor: torch.Tensor):
     """Yield the Llama names for one temporal-transformer tensor."""
     index, _, tail = name[len(BACKBONE_LAYER_PREFIX) :].partition(".")
     base = f"model.layers.{index}."
@@ -80,8 +80,8 @@ class PersonaPlexForCausalLM(nn.Module):
         max_batch = get_global_server_args().max_running_requests
         dtype = torch.get_default_dtype()
         device = self.text_emb.weight.device
-        self._fusion_buffer = torch.zeros(max_batch, dim, dtype=dtype, device=device)
-        self._hidden_out = torch.zeros(max_batch, dim, dtype=dtype, device=device)
+        self.fusion_buffer = torch.zeros(max_batch, dim, dtype=dtype, device=device)
+        self.hidden_out = torch.zeros(max_batch, dim, dtype=dtype, device=device)
 
     def get_attention_sliding_window_size(self) -> int:
         # Note (wilsonzheng0327): The reference attends where delta < context: the
@@ -99,13 +99,13 @@ class PersonaPlexForCausalLM(nn.Module):
 
     def forward(self, input_ids, positions, forward_batch, input_embeds=None, **_):
         if input_embeds is None:
-            input_embeds = self._fusion_buffer[: input_ids.shape[0]]
+            input_embeds = self.fusion_buffer[: input_ids.shape[0]]
         hidden = self.llm.model(input_ids, positions, forward_batch, input_embeds)
         if forward_batch.forward_mode.is_decode():
-            self._hidden_out[: hidden.shape[0]] = hidden
+            self.hidden_out[: hidden.shape[0]] = hidden
         else:
             last_rows = torch.cumsum(forward_batch.extend_seq_lens, dim=0) - 1
-            self._hidden_out[: last_rows.shape[0]] = hidden[last_rows]
+            self.hidden_out[: last_rows.shape[0]] = hidden[last_rows]
         return self.llm.logits_processor(
             input_ids, hidden, self.llm.lm_head, forward_batch
         )
@@ -116,7 +116,7 @@ class PersonaPlexForCausalLM(nn.Module):
         embeddings: dict[str, torch.Tensor] = {}
         for name, tensor in weights:
             if name.startswith(BACKBONE_LAYER_PREFIX):
-                backbone.extend(_backbone_weight(name, tensor))
+                backbone.extend(backbone_weight(name, tensor))
             elif name == "out_norm.alpha":
                 backbone.append(("model.norm.weight", tensor.reshape(-1)))
             elif name == "text_linear.weight":

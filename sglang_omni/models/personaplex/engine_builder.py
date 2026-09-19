@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Starts the SGLang engine for PersonaPlex from a Llama-shaped shim checkpoint."""
+
 from __future__ import annotations
 
 import atexit
@@ -74,7 +76,7 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
         }
 
     def setup_model(self, *, model_worker, checkpoint_dir, device, gpu_id, server_args):
-        del model_worker, checkpoint_dir, device, gpu_id, server_args
+        """Nothing beyond SGLang's own load: the model owns its buffers."""
 
     def make_model_runner(self, model_worker, output_proc):
         return PersonaPlexModelRunner(model_worker, output_proc)

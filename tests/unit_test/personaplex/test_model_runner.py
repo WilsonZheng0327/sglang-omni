@@ -47,9 +47,9 @@ class _Model:
     """Embeds a row as its own token ids, so fused inputs can be read back."""
 
     def __init__(self, max_batch: int = 2):
-        self._fusion_buffer = torch.zeros(max_batch, NUM_STREAMS)
-        self._hidden_out = torch.arange(max_batch * NUM_STREAMS, dtype=torch.float32)
-        self._hidden_out = self._hidden_out.view(max_batch, NUM_STREAMS)
+        self.fusion_buffer = torch.zeros(max_batch, NUM_STREAMS)
+        self.hidden_out = torch.arange(max_batch * NUM_STREAMS, dtype=torch.float32)
+        self.hidden_out = self.hidden_out.view(max_batch, NUM_STREAMS)
         self.depformer = _Depformer()
 
     def embed_rows(self, rows_NK: torch.Tensor) -> torch.Tensor:
@@ -117,7 +117,7 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     )
     prefill_call = model.depformer.calls[0]
     assert prefill_call.text.tolist() == [77]
-    assert torch.equal(prefill_call.hidden, model._hidden_out[0:1])
+    assert torch.equal(prefill_call.hidden, model.hidden_out[0:1])
     assert torch.equal(prefill_call.forced[0], timeline.forced_agent_at_start)
     assert torch.equal(
         data.talker_model_inputs["frames"][0],
@@ -127,7 +127,7 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     runner.before_decode(
         None, SimpleNamespace(reqs=[SimpleNamespace(output_ids=[77])]), [request]
     )
-    row = model._fusion_buffer[0].long()
+    row = model.fusion_buffer[0].long()
     assert row[0].item() == 77
     assert torch.equal(row[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET], prefill_call.codes)
     assert torch.equal(row[USER_STREAM_OFFSET:], timeline.user_rows[first_position])
@@ -145,7 +145,7 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     runner.before_decode(
         None, SimpleNamespace(reqs=[SimpleNamespace(output_ids=[77, 78])]), [request]
     )
-    row = model._fusion_buffer[0].long()
+    row = model.fusion_buffer[0].long()
     assert row[0].item() == 78
     assert torch.equal(row[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET], decode_call.codes)
     assert torch.equal(row[USER_STREAM_OFFSET:], timeline.user_rows[first_position + 1])

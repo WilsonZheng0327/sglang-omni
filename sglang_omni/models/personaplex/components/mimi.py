@@ -461,9 +461,6 @@ class MimiCodec(nn.Module):
         latent = self.upsample(self.quantizer.decode(codes_BKF))
         return self.decoder(self.decoder_transformer(latent))
 
-    # Note (wilsonzheng0327): The chunked encoder is unused offline; it is kept for live
-    # duplex sessions (#1909) and tested against the whole-sequence path.
-
     def init_encode_state(self) -> MimiEncodeState:
         return MimiEncodeState(
             encoder=self.encoder.init_state(),
@@ -500,24 +497,24 @@ class MimiCodec(nn.Module):
         return self.decoder.step(latent, state.decoder)
 
 
-_RENAMES = (
+RENAMES = (
     (re.compile(r"\.conv\.conv\."), ".conv."),
     (re.compile(r"\.convtr\.convtr\."), ".convtr."),
     (re.compile(r"_transformer\.transformer\."), "_transformer."),
 )
-_ACOUSTIC_LAYER = re.compile(r"^quantizer\.rvq_rest\.vq\.layers\.(\d+)\.")
+ACOUSTIC_LAYER = re.compile(r"^quantizer\.rvq_rest\.vq\.layers\.(\d+)\.")
 
 
 def rename_mimi_key(name: str) -> str | None:
     """Map a checkpoint tensor name onto this module tree; None drops it."""
-    match = _ACOUSTIC_LAYER.match(name)
+    match = ACOUSTIC_LAYER.match(name)
     if (
         match
         and int(match.group(1)) >= MIMI.num_codebooks - MIMI.num_semantic_codebooks
     ):
         # Note (wilsonzheng0327): Trained with 32 codebooks; Moshi uses only 8.
         return None
-    for pattern, replacement in _RENAMES:
+    for pattern, replacement in RENAMES:
         # Note (wilsonzheng0327): The reference nests convolutions up to three deep
         # (downsample.conv.conv.conv); here each is one module.
         while True:

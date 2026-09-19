@@ -94,7 +94,7 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
                 type="result",
                 data=StagePayload(
                     request_id=request_id,
-                    request=self._stream_payloads[request_id].request,
+                    request=self.stream_payloads[request_id].request,
                     data=audio_waveform_payload(
                         waveform,
                         sample_rate=SAMPLE_RATE,
