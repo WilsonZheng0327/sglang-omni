@@ -17,10 +17,10 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+from sentencepiece import SentencePieceProcessor
 
 from sglang_omni.models.personaplex.architecture import (
     SAMPLE_RATE,
@@ -29,9 +29,6 @@ from sglang_omni.models.personaplex.architecture import (
     TEXT_MARKER_IDS,
 )
 from sglang_omni.models.personaplex.timeline import voice_tail_codes_from_cache
-
-if TYPE_CHECKING:
-    from sentencepiece import SentencePieceProcessor
 
 TEXT_TOKENIZER_NAME = "tokenizer_spm_32k_3.model"
 VOICES_ARCHIVE_NAME = "voices.tgz"
@@ -47,12 +44,10 @@ DEFAULT_VOICE = "NATF2"
 
 
 def load_text_tokenizer(model_dir: str | Path) -> SentencePieceProcessor:
-    import sentencepiece
-
     path = Path(model_dir) / TEXT_TOKENIZER_NAME
     if not path.is_file():
         raise FileNotFoundError(f"PersonaPlex text tokenizer missing: {path}")
-    return sentencepiece.SentencePieceProcessor(model_file=str(path))
+    return SentencePieceProcessor(model_file=str(path))
 
 
 def wrap_system_tags(text: str) -> str:

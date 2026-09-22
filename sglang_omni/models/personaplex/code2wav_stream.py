@@ -12,6 +12,7 @@ import torch
 
 from sglang_omni.models.personaplex.architecture import SAMPLE_RATE
 from sglang_omni.models.personaplex.components.mimi import MimiCodec, MimiDecodeState
+from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.proto import StagePayload
 from sglang_omni.scheduling.messages import OutgoingMessage
 from sglang_omni.scheduling.streaming_simple_scheduler import StreamingSimpleScheduler
@@ -58,7 +59,11 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
         self._states: dict[str, _StreamState] = {}
 
     def is_streaming_payload(self, payload) -> bool:
-        return payload.request_id in self._states
+        # Note (wilsonzheng0327): The LM streams every frame it produces, so a reply
+        # with frames has chunks on the way whichever channel lands first; only an
+        # empty reply is rendered whole.
+        codes = PersonaPlexState.from_dict(payload.data).codes
+        return codes is not None and codes.shape[0] > 0
 
     def on_streaming_new_request(self, request_id: str, payload) -> None:
         self._states.setdefault(request_id, _StreamState(self._codec))
@@ -78,7 +83,7 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
         # so the caller length travels with each chunk.
         num_samples = int((item.metadata or {}).get("num_samples") or 0)
         if num_samples:
-            waveform = trim_to_caller(waveform, max(num_samples - state.emitted, 0))
+            waveform = waveform[..., : max(num_samples - state.emitted, 0)]
         state.emitted += waveform.shape[-1]
         state.audio_parts.append(waveform)
         return [_audio_message(request_id, waveform)]

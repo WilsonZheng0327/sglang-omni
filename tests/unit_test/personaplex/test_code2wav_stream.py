@@ -68,14 +68,30 @@ def test_interleaved_requests_stream_their_own_waveforms(random_codec):
         )
 
 
+def test_a_reply_with_frames_streams_whatever_arrives_first(random_codec):
+    scheduler = PersonaPlexCode2WavScheduler(
+        random_codec, compute_fn=lambda payload: payload
+    )
+    empty = StagePayload(
+        "a", request=OmniRequest(inputs={}), data=PersonaPlexState().to_dict()
+    )
+    assert not scheduler.is_streaming_payload(empty)
+    with_frames = StagePayload(
+        "a",
+        request=OmniRequest(inputs={}),
+        data=PersonaPlexState(codes=torch.zeros(3, 8, dtype=torch.long)).to_dict(),
+    )
+    assert scheduler.is_streaming_payload(with_frames)
+
+
 def test_abort_clears_stream_state(random_codec):
     scheduler = PersonaPlexCode2WavScheduler(
         random_codec, compute_fn=lambda payload: payload
     )
-    payload = _start(scheduler, "a")
-    assert scheduler.is_streaming_payload(payload)
+    _start(scheduler, "a")
+    assert scheduler.on_stream_done("a") != []
     scheduler.clear_stream_state("a")
-    assert not scheduler.is_streaming_payload(payload)
+    assert scheduler.on_stream_done("a") == []
     assert scheduler.on_stream_done("never-started") == []
 
 
