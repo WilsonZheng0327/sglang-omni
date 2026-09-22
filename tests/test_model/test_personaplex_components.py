@@ -15,9 +15,11 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from einops import rearrange
 from safetensors import safe_open
 from safetensors.torch import load_file
 from torch import nn
+from torch.nn import functional
 
 from sglang_omni.models.personaplex.architecture import (
     DEPFORMER,
@@ -28,6 +30,7 @@ from sglang_omni.models.personaplex.architecture import (
 from sglang_omni.models.personaplex.components.depformer import (
     Depformer,
     DepformerLayer,
+    rms_norm_f32,
 )
 from sglang_omni.models.personaplex.components.mimi import (
     MimiCodec,
@@ -219,16 +222,33 @@ def per_step_diff(logits: torch.Tensor, expected: torch.Tensor) -> list[float]:
     return (logits - expected).abs().amax(dim=(0, 2)).tolist()
 
 
-DEPFORMER_STEP = DepformerLayer.step
+def ring_step(self, x_BD, step, cache_2BHSD):
+    """DepformerLayer.step with the reference's full-ring behaviour at the last step.
 
-
-def ring_step(self, x, step, cache):
-    # Note (wilsonzheng0327): On the 8-step base the reference's ring holds exactly
-    # one frame; once full, its position math marks step 0 as future, so the
-    # last step never sees it.
-    if step == self.spec.steps - 1:
-        cache = cache[1:]
-    return DEPFORMER_STEP(self, x, step, cache)
+    On the 8-step base the reference's ring holds exactly one frame; once full,
+    its position math marks step 0 as future, so the last step never sees it.
+    """
+    spec = self.spec
+    h = rms_norm_f32(x_BD, self.norm1_alpha, spec.rms_norm_eps)
+    qkv = functional.linear(h, self.in_proj_weight[step])
+    q, k, v = rearrange(qkv, "b (p h d) -> p b h d", p=3, h=spec.num_heads)
+    cache_2BHSD[0, :, :, step] = k
+    cache_2BHSD[1, :, :, step] = v
+    first = 1 if step == spec.steps - 1 else 0
+    attn = functional.scaled_dot_product_attention(
+        q[:, :, None],
+        cache_2BHSD[0, :, :, first : step + 1],
+        cache_2BHSD[1, :, :, first : step + 1],
+    )
+    x_BD = x_BD + functional.linear(
+        rearrange(attn, "b h 1 d -> b (h d)"), self.out_proj_weight[step]
+    )
+    h = rms_norm_f32(x_BD, self.norm2_alpha, spec.rms_norm_eps)
+    gate = functional.linear(h, self.gate_in_weight[step])
+    gate, up = gate.chunk(2, dim=-1)
+    return x_BD + functional.linear(
+        functional.silu(gate) * up, self.gate_out_weight[step]
+    )
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["f32", "bf16"])

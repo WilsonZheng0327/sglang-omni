@@ -3,7 +3,8 @@
 
 Every step has its own projection, gating and output head (weights_per_step
 in the reference); the norms are shared. Attention runs over the steps of the
-same frame only, so its cache is a list that starts empty every frame.
+same frame only, so each layer's K/V cache is one buffer sized to the frame's
+steps, written in place and re-made every frame.
 """
 
 from __future__ import annotations
@@ -44,16 +45,20 @@ class DepformerLayer(nn.Module):
         self.gate_out_weight = nn.Parameter(torch.empty(steps, dim, ffn))
 
     def step(
-        self, x_BD: torch.Tensor, step: int, cache: list[torch.Tensor]
+        self, x_BD: torch.Tensor, step: int, cache_2BHSD: torch.Tensor
     ) -> torch.Tensor:
+        """One step; cache_2BHSD holds this frame's keys and values, slot per step."""
         spec = self.spec
         h = rms_norm_f32(x_BD, self.norm1_alpha, spec.rms_norm_eps)
         qkv = functional.linear(h, self.in_proj_weight[step])
         q, k, v = rearrange(qkv, "b (p h d) -> p b h d", p=3, h=spec.num_heads)
-        cache.append(torch.stack([k, v]))
-        keys = torch.stack([kv[0] for kv in cache], dim=2)
-        values = torch.stack([kv[1] for kv in cache], dim=2)
-        attn = functional.scaled_dot_product_attention(q[:, :, None], keys, values)
+        cache_2BHSD[0, :, :, step] = k
+        cache_2BHSD[1, :, :, step] = v
+        attn = functional.scaled_dot_product_attention(
+            q[:, :, None],
+            cache_2BHSD[0, :, :, : step + 1],
+            cache_2BHSD[1, :, :, : step + 1],
+        )
         x_BD = x_BD + functional.linear(
             rearrange(attn, "b h 1 d -> b (h d)"), self.out_proj_weight[step]
         )
@@ -102,10 +107,20 @@ class Depformer(nn.Module):
                 steps after it, as teacher forcing does in the reference.
             sample: [B, card] float logits → [B] ids.
         """
-        caches: list[list[torch.Tensor]] = [[] for _ in self.layers]
+        spec = self.spec
+        caches = [
+            transformer_out_BD.new_empty(
+                2,
+                transformer_out_BD.shape[0],
+                spec.num_heads,
+                spec.steps,
+                spec.head_dim,
+            )
+            for _ in self.layers
+        ]
         previous = text_token_B
         codes = []
-        for step in range(self.spec.steps):
+        for step in range(spec.steps):
             token_emb = (
                 self.depformer_text_emb(previous)
                 if step == 0
