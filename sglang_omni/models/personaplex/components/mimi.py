@@ -65,11 +65,22 @@ class AttentionState:
 
 
 class MimiAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, context: int, max_period: float):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        context: int,
+        max_period: float,
+        *,
+        write_chunk: int,
+    ):
         super().__init__()
         self.num_heads = num_heads
         self.context = context
         self.max_period = max_period
+        # Note (wilsonzheng0327): Steps the reference writes to its ring per call (one
+        # codec frame); the whole-sequence mask below reproduces that ring's behaviour.
+        self.write_chunk = write_chunk
         self.in_proj_weight = nn.Parameter(torch.empty(3 * dim, dim))
         self.out_proj = nn.Linear(dim, dim, bias=False)
 
@@ -83,11 +94,28 @@ class MimiAttention(nn.Module):
         )
         pos_q = offset + torch.arange(length, device=x.device)
         q, k = apply_interleaved_rope(q, k, pos_q, self.max_period)
-        pos_k = pos_q if state is None else self._write_ring(k, v, state)
-        if state is not None:
+        if state is None:
+            pos_k = pos_q
+            delta = pos_q.view(-1, 1) - pos_k.view(1, -1)
+            # Note (wilsonzheng0327): The reference writes a whole chunk into its ring
+            # before attending, and once the ring is full it labels the slot at the
+            # write cursor as a future position. So a query sees only the keys
+            # newer than cursor - context, the cursor taken after its own chunk:
+            # the plain window until the ring fills, one to two keys fewer after.
+            # A partial last chunk only advances the cursor by what it holds.
+            # As a rule over positions this is one batched attention that matches
+            # the frame-by-frame ring bit for bit.
+            cursor = ((pos_q // self.write_chunk + 1) * self.write_chunk).clamp(
+                max=offset + length
+            )
+            mask = (delta >= 0) & (
+                pos_k.view(1, -1) > (cursor - self.context).view(-1, 1)
+            )
+        else:
+            pos_k = self._write_ring(k, v, state)
             k, v = state.keys, state.values
-        delta = pos_q.view(-1, 1) - pos_k.view(1, -1)
-        mask = (pos_k.view(1, -1) >= 0) & (delta >= 0) & (delta < self.context)
+            delta = pos_q.view(-1, 1) - pos_k.view(1, -1)
+            mask = (pos_k.view(1, -1) >= 0) & (delta >= 0) & (delta < self.context)
         out = functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         return self.out_proj(rearrange(out, "b h t d -> b t (h d)"))
 
@@ -95,9 +123,8 @@ class MimiAttention(nn.Module):
         """Store this step in the ring and label every slot as the reference does.
 
         The slot about to be overwritten is labelled as a future position, so
-        once the ring is full its oldest entry falls outside the window. Reading
-        the buffer in ring order is what keeps results bit-identical to the
-        reference, and is why long inputs replay this path step by step.
+        once the ring is full its oldest entry falls outside the window; the
+        non-streaming mask in forward applies the same rule without the ring.
         """
         capacity = self.context
         if state.keys is None:
@@ -133,7 +160,11 @@ class MimiTransformerLayer(nn.Module):
     def __init__(self, spec: MimiSpec) -> None:
         super().__init__()
         self.self_attn = MimiAttention(
-            spec.dim, spec.num_heads, spec.context, spec.rope_max_period
+            spec.dim,
+            spec.num_heads,
+            spec.context,
+            spec.rope_max_period,
+            write_chunk=spec.frame_ratio,
         )
         self.norm1 = nn.LayerNorm(spec.dim, eps=spec.layer_norm_eps)
         self.norm2 = nn.LayerNorm(spec.dim, eps=spec.layer_norm_eps)
@@ -170,18 +201,6 @@ class MimiTransformer(StreamingModule):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Note (wilsonzheng0327): Once an input fills the ring the result depends on the
-        # reference's key order and chunking, so a long input replays the streaming path.
-        if x.shape[-1] >= self.spec.context:
-            state = self.init_state()
-            chunk = max(self.spec.frame_ratio, 1)
-            return torch.cat(
-                [
-                    self.step(x[..., t : t + chunk], state)
-                    for t in range(0, x.shape[-1], chunk)
-                ],
-                -1,
-            )
         x = x.transpose(1, 2)
         for layer in self.layers:
             x = layer(x)
