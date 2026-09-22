@@ -160,7 +160,7 @@ def test_whole_reply_decode_is_cut_back_to_the_caller_length(monkeypatch):
         "r", request=OmniRequest(inputs={}, params={}), data=state.to_dict()
     )
     rendered = np.frombuffer(
-        scheduler._fn(payload).data["audio_waveform"], dtype=np.float32
+        scheduler.compute_fn(payload).data["audio_waveform"], dtype=np.float32
     )
     assert rendered.shape[-1] == num_samples
     assert rendered[-1] == num_samples - 1

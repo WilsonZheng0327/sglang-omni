@@ -72,3 +72,25 @@ curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -
 ## Tests
 
 `tests/unit_test/personaplex/` runs on CPU without weights: the delayed timeline, chunked Mimi against whole-sequence Mimi, the depformer, checkpoint weight routing, the model-runner hooks, the streaming codec stage, the checkpoint shim, preprocessing and voice unpacking, and request lowering.
+
+`tests/test_model/test_personaplex_parity.py` (marker `accelerator`, one GPU) recreates the greedy parity numbers: it runs the port and the reference's `moshi.offline --greedy` on the reference checkout's `assets/test` recordings (`input_assistant.wav` with `NATF2`, `input_service.wav` with `NATM1` and the service prompt) and compares the reply audio frame by frame. Because the reference is not deterministic past its first near-tie, each case asserts at least 100 leading identical frames and matching text up to the first divergence; two more tests check that the port is identical across reruns and that `seed` makes sampling reproducible. The measured frame counts and texts are printed (`-s`). The reference pins an older torch, so it runs from its own interpreter:
+
+```bash
+PERSONAPLEX_REFERENCE_SOURCE=~/personaplex \
+PERSONAPLEX_REFERENCE_PYTHON=~/personaplex/.venv/bin/python \
+PERSONAPLEX_REFERENCE_DIR=~/.cache/personaplex-parity \
+pytest tests/test_model/test_personaplex_parity.py -s
+```
+
+`PERSONAPLEX_REFERENCE_SOURCE` is the [NVIDIA/personaplex](https://github.com/NVIDIA/personaplex) checkout and `PERSONAPLEX_REFERENCE_PYTHON` an interpreter with its `moshi/` package installed. `PERSONAPLEX_REFERENCE_DIR` is optional and caches the reference outputs (`<case>/output.wav`, `output.json`) across runs; with the cache filled, the reference interpreter is not needed. `PERSONAPLEX_PARITY_CHECKPOINT` and `PERSONAPLEX_PARITY_STAGE_ARGS` (for example `--lm.engine.mem_fraction_static 0.5` on a 48 GB card) configure the port, `PERSONAPLEX_REFERENCE_REPO` the reference, and `PERSONAPLEX_PARITY_ATOL` the per-sample tolerance for an identical frame (default 1e-4).
+
+`tests/test_model/test_personaplex_components.py` (marker `accelerator`, one GPU) checks the components on the public Moshi base, [kyutai/moshiko-pytorch-bf16](https://huggingface.co/kyutai/moshiko-pytorch-bf16), which shares Mimi and every dimension: Mimi encode and decode (whole and chunked, against the reference's streaming path, which is what it serves with), the summed input embeddings, and the depformer's teacher-forced logits for one frame in float32 and bf16, with and without the reference's ring-cache behaviour at the last step. TF32 is off on both sides, as in the reference's own tests. The reference side is `tests/test_model/personaplex_reference_dump.py`, which runs under the reference interpreter and writes one safetensors file; the test creates it when `PERSONAPLEX_REFERENCE_DUMP` does not exist yet:
+
+```bash
+PERSONAPLEX_REFERENCE_SOURCE=~/personaplex \
+PERSONAPLEX_REFERENCE_PYTHON=~/personaplex/.venv/bin/python \
+PERSONAPLEX_REFERENCE_DUMP=~/.cache/personaplex-parity/moshi_base_reference.safetensors \
+pytest tests/test_model/test_personaplex_components.py -s
+```
+
+`PERSONAPLEX_MOSHI_BASE` overrides the base checkpoint (a directory or repo id).

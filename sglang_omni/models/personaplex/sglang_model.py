@@ -14,7 +14,7 @@ from collections.abc import Iterable
 
 import torch
 from sglang.srt.models.llama import LlamaForCausalLM
-from sglang.srt.server_args import get_global_server_args
+from sglang.srt.runtime_context import get_schedule
 from sglang.srt.utils import add_prefix
 from torch import nn
 
@@ -77,7 +77,7 @@ class PersonaPlexForCausalLM(nn.Module):
         self.text_emb = nn.Embedding(TEXT_CARD + 1, dim)
         self.depformer = Depformer(DEPFORMER)
 
-        max_batch = get_global_server_args().max_running_requests
+        max_batch = get_schedule().max_running_requests
         dtype = torch.get_default_dtype()
         device = self.text_emb.weight.device
         self.fusion_buffer = torch.zeros(max_batch, dim, dtype=dtype, device=device)
