@@ -226,7 +226,14 @@ async def test_concurrency_sweep_writes_per_point_output_dirs(
     payload = await run_tts_concurrency_sweep(config, [16, 32])
     expected = [str(tmp_path / "c16"), str(tmp_path / "c32")]
     assert seen_output_dirs == expected
-    assert [row["output_dir"] for row in payload["rows"]] == expected
+    assert [row["per_repeat"][0]["output_dir"] for row in payload["rows"]] == expected
+    assert [row["repeats"] for row in payload["rows"]] == [1, 1]
+    assert payload["rows"][0]["latency_p95_s"] == {
+        "mean": 0.1,
+        "min": 0.1,
+        "max": 0.1,
+        "n": 1,
+    }
     assert (tmp_path / "c16" / "speed_results.json").is_file()
     assert (tmp_path / "c32" / "speed_results.json").is_file()
     assert payload["repeats"] == 1
@@ -244,7 +251,7 @@ async def test_concurrency_sweep_repeats_aggregate(
                 "completed_requests": 1,
                 "failed_requests": 0,
                 "latency_p95_s": latency,
-                "audio_ttfp_p95_s": None,
+                "throughput_qps": 4.0,
             }
         }
 
@@ -252,12 +259,13 @@ async def test_concurrency_sweep_repeats_aggregate(
     config = _config_from_cli("--output-dir", str(tmp_path), "--generate-only")
     payload = await run_tts_concurrency_sweep(config, [16], repeats=2)
     row = payload["rows"][0]
-    assert row["output_dirs"] == [
+    assert [item["output_dir"] for item in row["per_repeat"]] == [
         str(tmp_path / "c16_r1"),
         str(tmp_path / "c16_r2"),
     ]
     assert row["latency_p95_s"] == {"mean": 2.0, "min": 1.0, "max": 3.0, "n": 2}
-    assert row["audio_ttfp_p95_s"]["n"] == 0
+    assert row["throughput_qps"] == {"mean": 4.0, "min": 4.0, "max": 4.0, "n": 2}
+    assert row["latency_mean_s"]["n"] == 0
     assert [item["repeat"] for item in row["per_repeat"]] == [1, 2]
 
 

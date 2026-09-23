@@ -139,18 +139,19 @@ import os
 import time
 from dataclasses import asdict, dataclass, replace
 from functools import partial
-from typing import Literal, Protocol, TypedDict
+from typing import Protocol, TypedDict
 
 import aiohttp
 
 from benchmarks.benchmarker.conditions import (
-    MetricAggregate,
-    aggregate_numbers,
+    ConcurrencyAggregate,
+    RepeatSpeedSummary,
+    aggregate_repeats,
     collect_run_fingerprint,
-    present_floats,
     warn_if_tail_percentile_is_thin,
 )
 from benchmarks.benchmarker.data import RequestResult
+from benchmarks.benchmarker.fingerprint import BenchmarkFingerprint
 from benchmarks.benchmarker.runner import (
     BenchmarkRunner,
     RunConfig,
@@ -163,7 +164,6 @@ from benchmarks.benchmarker.utils import (
     wait_for_service,
 )
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
-from benchmarks.eval.asr_profiling import BenchmarkFingerprint
 from benchmarks.metrics.performance import (
     build_speed_results,
     compute_speed_metrics,
@@ -195,47 +195,6 @@ logger = logging.getLogger(__name__)
 
 TEXT_PREVIEW_LENGTH = 60
 DEFAULT_TTS_BENCHMARK_CONCURRENCY = int(os.getenv("TTS_BENCHMARK_CONCURRENCY", "16"))
-SweepMetricName = Literal[
-    "throughput_qps",
-    "audio_throughput_s_per_s",
-    "latency_mean_s",
-    "latency_median_s",
-    "latency_p95_s",
-    "latency_p99_s",
-    "rtf_mean",
-    "audio_duration_mean_s",
-]
-
-
-class RepeatSpeedSummary(TypedDict, total=False):
-    repeat: int
-    output_dir: str
-    completed_requests: int
-    failed_requests: int
-    throughput_qps: float
-    audio_throughput_s_per_s: float
-    latency_mean_s: float
-    latency_median_s: float
-    latency_p95_s: float
-    latency_p99_s: float
-    rtf_mean: float | None
-    audio_duration_mean_s: float
-
-
-class ConcurrencyAggregate(TypedDict):
-    concurrency: int
-    repeats: int
-    completed_requests: int
-    failed_requests: int
-    throughput_qps: MetricAggregate
-    audio_throughput_s_per_s: MetricAggregate
-    latency_mean_s: MetricAggregate
-    latency_median_s: MetricAggregate
-    latency_p95_s: MetricAggregate
-    latency_p99_s: MetricAggregate
-    rtf_mean: MetricAggregate
-    audio_duration_mean_s: MetricAggregate
-    per_repeat: list[RepeatSpeedSummary]
 
 
 class SampleRequestSend(Protocol):
@@ -686,40 +645,6 @@ async def benchmark(config: OmniSeedttsBenchmarkConfig) -> dict:
         results["summary"], config.model, concurrency=config.max_concurrency
     )
     return results
-
-
-def aggregate_metric(
-    summaries: list[RepeatSpeedSummary], metric_name: SweepMetricName
-) -> MetricAggregate:
-    raw_values: list[object] = []
-    for summary in summaries:
-        raw_values.append(summary.get(metric_name))
-    return aggregate_numbers(present_floats(raw_values))
-
-
-def aggregate_repeats(
-    concurrency: int, summaries: list[RepeatSpeedSummary]
-) -> ConcurrencyAggregate:
-    """Aggregate repeat summaries the way the ASR sweeps do, keeping every raw row."""
-    return {
-        "concurrency": concurrency,
-        "repeats": len(summaries),
-        "completed_requests": sum(
-            summary["completed_requests"] for summary in summaries
-        ),
-        "failed_requests": sum(summary["failed_requests"] for summary in summaries),
-        "throughput_qps": aggregate_metric(summaries, "throughput_qps"),
-        "audio_throughput_s_per_s": aggregate_metric(
-            summaries, "audio_throughput_s_per_s"
-        ),
-        "latency_mean_s": aggregate_metric(summaries, "latency_mean_s"),
-        "latency_median_s": aggregate_metric(summaries, "latency_median_s"),
-        "latency_p95_s": aggregate_metric(summaries, "latency_p95_s"),
-        "latency_p99_s": aggregate_metric(summaries, "latency_p99_s"),
-        "rtf_mean": aggregate_metric(summaries, "rtf_mean"),
-        "audio_duration_mean_s": aggregate_metric(summaries, "audio_duration_mean_s"),
-        "per_repeat": summaries,
-    }
 
 
 def run_sweep(

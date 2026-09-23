@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Contracts for comparable benchmark speed measurements."""
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ import httpx
 import pytest
 
 from benchmarks.benchmarker.conditions import (
+    SWEEP_METRIC_NAMES,
     aggregate_numbers,
+    aggregate_repeats,
     fingerprint_fields,
     sampling_seed_field,
     warn_if_tail_percentile_is_thin,
@@ -78,12 +81,30 @@ def test_sampling_seed_field_keeps_zero_and_omits_unset() -> None:
 
 def test_aggregate_numbers_empty_and_populated() -> None:
     assert aggregate_numbers([]) == {"mean": None, "min": None, "max": None, "n": 0}
-    assert aggregate_numbers([1.0, 3.0]) == {
+    assert aggregate_numbers([1.0, None, 3.0]) == {
         "mean": 2.0,
         "min": 1.0,
         "max": 3.0,
         "n": 2,
     }
+
+
+def test_sweep_aggregate_uses_the_shared_metric_names() -> None:
+    row = aggregate_repeats(
+        1,
+        [
+            {
+                "repeat": 1,
+                "output_dir": "c1",
+                "completed_requests": 1,
+                "failed_requests": 0,
+            }
+        ],
+    )
+    assert row["repeats"] == 1
+    assert len(row["per_repeat"]) == 1
+    for metric_name in SWEEP_METRIC_NAMES:
+        assert set(row[metric_name]) == {"mean", "min", "max", "n"}
 
 
 def test_fingerprint_fields_skip_collection_when_disabled(

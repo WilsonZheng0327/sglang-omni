@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared recording for benchmark runs that compare speed across revisions."""
 
 from __future__ import annotations
@@ -5,9 +6,9 @@ from __future__ import annotations
 import argparse
 import logging
 import statistics
-from typing import TypedDict
+from typing import Literal, TypedDict
 
-from benchmarks.eval.asr_profiling import (
+from benchmarks.benchmarker.fingerprint import (
     BenchmarkFingerprint,
     collect_environment_fingerprint,
     collect_server_identity,
@@ -24,6 +25,59 @@ class MetricAggregate(TypedDict):
     min: float | None
     max: float | None
     n: int
+
+
+SweepMetricName = Literal[
+    "throughput_qps",
+    "audio_throughput_s_per_s",
+    "latency_mean_s",
+    "latency_median_s",
+    "latency_p95_s",
+    "latency_p99_s",
+    "rtf_mean",
+    "audio_duration_mean_s",
+]
+SWEEP_METRIC_NAMES: tuple[SweepMetricName, ...] = (
+    "throughput_qps",
+    "audio_throughput_s_per_s",
+    "latency_mean_s",
+    "latency_median_s",
+    "latency_p95_s",
+    "latency_p99_s",
+    "rtf_mean",
+    "audio_duration_mean_s",
+)
+
+
+class RepeatSpeedSummary(TypedDict, total=False):
+    repeat: int
+    output_dir: str
+    completed_requests: int
+    failed_requests: int
+    throughput_qps: float
+    audio_throughput_s_per_s: float
+    latency_mean_s: float
+    latency_median_s: float
+    latency_p95_s: float
+    latency_p99_s: float
+    rtf_mean: float | None
+    audio_duration_mean_s: float
+
+
+class ConcurrencyAggregate(TypedDict):
+    concurrency: int
+    repeats: int
+    completed_requests: int
+    failed_requests: int
+    throughput_qps: MetricAggregate
+    audio_throughput_s_per_s: MetricAggregate
+    latency_mean_s: MetricAggregate
+    latency_median_s: MetricAggregate
+    latency_p95_s: MetricAggregate
+    latency_p99_s: MetricAggregate
+    rtf_mean: MetricAggregate
+    audio_duration_mean_s: MetricAggregate
+    per_repeat: list[RepeatSpeedSummary]
 
 
 def warn_if_tail_percentile_is_thin(sample_count: int) -> None:
@@ -71,30 +125,52 @@ def add_talker_sampling_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--talker-repetition-penalty", type=float, default=None)
 
 
-def optional_float(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)
-
-
-def present_floats(values: list[object]) -> list[float]:
-    numbers: list[float] = []
+def aggregate_numbers(values: list[float | None]) -> MetricAggregate:
+    present: list[float] = []
     for value in values:
-        number = optional_float(value)
-        if number is None:
+        if value is None:
             continue
-        numbers.append(number)
-    return numbers
-
-
-def aggregate_numbers(values: list[float]) -> MetricAggregate:
-    if not values:
+        present.append(value)
+    if not present:
         return {"mean": None, "min": None, "max": None, "n": 0}
     return {
-        "mean": statistics.mean(values),
-        "min": min(values),
-        "max": max(values),
-        "n": len(values),
+        "mean": statistics.mean(present),
+        "min": min(present),
+        "max": max(present),
+        "n": len(present),
+    }
+
+
+def aggregate_metric(
+    summaries: list[RepeatSpeedSummary], metric_name: SweepMetricName
+) -> MetricAggregate:
+    return aggregate_numbers([summary.get(metric_name) for summary in summaries])
+
+
+def aggregate_repeats(
+    concurrency: int, summaries: list[RepeatSpeedSummary]
+) -> ConcurrencyAggregate:
+    """Aggregate one concurrency level, keeping every raw repeat row."""
+    return {
+        "concurrency": concurrency,
+        "repeats": len(summaries),
+        "completed_requests": sum(
+            summary.get("completed_requests", 0) for summary in summaries
+        ),
+        "failed_requests": sum(
+            summary.get("failed_requests", 0) for summary in summaries
+        ),
+        "throughput_qps": aggregate_metric(summaries, "throughput_qps"),
+        "audio_throughput_s_per_s": aggregate_metric(
+            summaries, "audio_throughput_s_per_s"
+        ),
+        "latency_mean_s": aggregate_metric(summaries, "latency_mean_s"),
+        "latency_median_s": aggregate_metric(summaries, "latency_median_s"),
+        "latency_p95_s": aggregate_metric(summaries, "latency_p95_s"),
+        "latency_p99_s": aggregate_metric(summaries, "latency_p99_s"),
+        "rtf_mean": aggregate_metric(summaries, "rtf_mean"),
+        "audio_duration_mean_s": aggregate_metric(summaries, "audio_duration_mean_s"),
+        "per_repeat": summaries,
     }
 
 

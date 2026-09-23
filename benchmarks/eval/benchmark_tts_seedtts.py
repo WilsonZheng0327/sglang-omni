@@ -90,13 +90,15 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.benchmarker.conditions import (
+    ConcurrencyAggregate,
+    RepeatSpeedSummary,
     add_fingerprint_argument,
-    aggregate_numbers,
+    aggregate_repeats,
     collect_run_fingerprint,
-    present_floats,
     warn_if_tail_percentile_is_thin,
 )
 from benchmarks.benchmarker.data import RequestResult
+from benchmarks.benchmarker.fingerprint import BenchmarkFingerprint
 from benchmarks.benchmarker.runner import (
     BenchmarkRunner,
     RunConfig,
@@ -105,7 +107,6 @@ from benchmarks.benchmarker.runner import (
 )
 from benchmarks.benchmarker.utils import managed_omni_server
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
-from benchmarks.eval.asr_profiling import BenchmarkFingerprint
 from benchmarks.metrics.performance import (
     build_speed_results,
     compute_speed_metrics,
@@ -658,72 +659,38 @@ async def run_tts_concurrency_sweep(
     """Run generate-only across concurrencies and optional repeats."""
     if repeats < 1:
         raise ValueError(f"repeats must be positive, got {repeats}")
-    rows: list[dict[str, Any]] = []
+    rows: list[ConcurrencyAggregate] = []
     for concurrency in concurrencies:
-        repeat_rows: list[dict[str, Any]] = []
+        repeat_summaries: list[RepeatSpeedSummary] = []
         for repeat_index in range(1, repeats + 1):
             if repeats == 1:
-                point_output_dir = os.path.join(config.output_dir, f"c{concurrency}")
+                point_name = f"c{concurrency}"
             else:
-                point_output_dir = os.path.join(
-                    config.output_dir, f"c{concurrency}_r{repeat_index}"
-                )
+                point_name = f"c{concurrency}_r{repeat_index}"
+            point_output_dir = os.path.join(config.output_dir, point_name)
             point = replace(
                 config,
                 concurrency=concurrency,
                 output_dir=point_output_dir,
             )
-            if repeats == 1:
-                print(f"[conc={concurrency}] generate pass")
-            else:
-                print(
-                    f"[conc={concurrency} repeat={repeat_index}/{repeats}] "
-                    "generate pass"
-                )
+            print(f"[conc={concurrency} repeat={repeat_index}/{repeats}] generate pass")
             results = await run_tts_seedtts_benchmark(point)
             summary = results["summary"]
-            success = int(summary.get("completed_requests") or 0)
-            failed = int(summary.get("failed_requests") or 0)
-            row = {
-                "concurrency": concurrency,
-                "warmup": _resolve_warmup(point),
-                "output_dir": point_output_dir,
-                "success": success,
-                "failed": failed,
-                "latency_p95_s": summary.get("latency_p95_s"),
-                "audio_ttfp_p95_s": summary.get("audio_ttfp_p95_s"),
-                "summary": summary,
-            }
-            if repeats == 1:
-                recorded_row = row
-            else:
-                recorded_row = {**row, "repeat": repeat_index}
-            repeat_rows.append(recorded_row)
-            print_speed_summary(summary, config.model, concurrency=concurrency)
-            print(
-                f"  success={success} failed={failed} "
-                f"latency_p95={row['latency_p95_s']} "
-                f"ttfa_p95={row['audio_ttfp_p95_s']}"
-            )
-        if repeats == 1:
-            rows.append(repeat_rows[0])
-        else:
-            rows.append(
+            repeat_summaries.append(
                 {
-                    "concurrency": concurrency,
-                    "repeats": repeats,
-                    "output_dirs": [item["output_dir"] for item in repeat_rows],
-                    "latency_p95_s": aggregate_numbers(
-                        present_floats([item["latency_p95_s"] for item in repeat_rows])
-                    ),
-                    "audio_ttfp_p95_s": aggregate_numbers(
-                        present_floats(
-                            [item["audio_ttfp_p95_s"] for item in repeat_rows]
-                        )
-                    ),
-                    "per_repeat": repeat_rows,
+                    "repeat": repeat_index,
+                    "output_dir": point_output_dir,
+                    **summary,
                 }
             )
+            print_speed_summary(summary, config.model, concurrency=concurrency)
+            print(
+                f"  success={summary.get('completed_requests')} "
+                f"failed={summary.get('failed_requests')} "
+                f"latency_p95={summary.get('latency_p95_s')} "
+                f"ttfa_p95={summary.get('audio_ttfp_p95_s')}"
+            )
+        rows.append(aggregate_repeats(concurrency, repeat_summaries))
 
     payload = {
         "config": _build_results_config(config, base_url=build_base_url(config)),

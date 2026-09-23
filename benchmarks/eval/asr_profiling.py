@@ -7,24 +7,20 @@ Small, dependency-light building blocks used by ``benchmark_asr_seedtts``:
   (``/start_request_profile`` / ``/stop_request_profile``);
 - stage/hop breakdown assembly from profiler event JSONL via
   ``sglang_omni.profiler.views``;
-- background host-CPU / GPU utilization sampling around a benchmark pass;
-- environment fingerprinting so results stay attributable to an exact
-  code + dependency + hardware state.
+- background host-CPU / GPU utilization sampling around a benchmark pass.
+  Environment fingerprints live in benchmarks.benchmarker.fingerprint.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import platform
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TextIO, TypedDict
+from typing import Any, TextIO
 
 import requests
 
@@ -271,161 +267,6 @@ class UtilizationSampler:
             load_avg_1m_max=max(loads) if loads else None,
             gpu=gpu_summary,
         )
-
-
-def _run_command(command: list[str]) -> str | None:
-    try:
-        return subprocess.run(
-            command, capture_output=True, text=True, timeout=60, check=True
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _package_version(name: str) -> str | None:
-    try:
-        from importlib.metadata import version
-
-        return version(name)
-    except Exception:
-        return None
-
-
-_FINGERPRINT_ENV_KEYS = (
-    "CUDA_VISIBLE_DEVICES",
-    "HF_HOME",
-    "HF_ENDPOINT",
-    "TORCHINDUCTOR_CACHE_DIR",
-    "OMP_NUM_THREADS",
-    "SGLANG_TORCH_PROFILER_DIR",
-)
-
-
-class GitFingerprint(TypedDict):
-    sha: str | None
-    branch: str | None
-    dirty: bool
-
-
-class EnvironmentFingerprint(TypedDict):
-    captured_at: str
-    hostname: str
-    platform: str
-    python: str
-    git: GitFingerprint
-    packages: dict[str, str | None]
-    dependency_freeze_sha256: str | None
-    gpus: str | None
-    env: dict[str, str | None]
-
-
-class ModelEnvironmentFingerprint(EnvironmentFingerprint):
-    model_path: str
-    model_revision: str | None
-
-
-class ServerIdentity(TypedDict):
-    url: str
-    models: list[str] | None
-
-
-class BenchmarkFingerprint(TypedDict):
-    client: EnvironmentFingerprint | ModelEnvironmentFingerprint
-    server: ServerIdentity
-
-
-def collect_server_identity(base_url: str) -> ServerIdentity:
-    """Best-effort identity of the serving process under test.
-
-    The client-side fingerprint describes the benchmark process; the server
-    may run different code. This records what the server itself reports
-    (currently its /v1/models listing) alongside the target URL.
-    """
-    identity: ServerIdentity = {"url": base_url.rstrip("/"), "models": None}
-    try:
-        response = requests.get(
-            f"{base_url.rstrip('/')}/v1/models",
-            timeout=10,
-            proxies=_NO_PROXIES,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        model_ids: list[str] = []
-        for entry in payload.get("data", []):
-            model_id = entry.get("id")
-            if isinstance(model_id, str) and model_id:
-                model_ids.append(model_id)
-        identity["models"] = model_ids
-    except (requests.RequestException, ValueError):
-        identity["models"] = None
-    return identity
-
-
-def collect_environment_fingerprint(
-    model_path: str | None = None,
-) -> EnvironmentFingerprint | ModelEnvironmentFingerprint:
-    """Capture code, dependency, and hardware identity of the client process.
-
-    Every field is best-effort: a missing tool (git outside a checkout,
-    nvidia-smi on CPU hosts) yields None rather than an exception, so the
-    fingerprint never blocks a run. This describes the benchmark client;
-    pair it with :func:`collect_server_identity` for the server side (they
-    coincide only when client and server share one host and checkout).
-    """
-    pip_freeze = _run_command([sys.executable, "-m", "pip", "freeze"])
-    fingerprint: EnvironmentFingerprint = {
-        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "hostname": platform.node(),
-        "platform": platform.platform(),
-        "python": sys.version.split()[0],
-        "git": {
-            "sha": _run_command(["git", "rev-parse", "HEAD"]),
-            "branch": _run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
-            "dirty": bool(_run_command(["git", "status", "--porcelain"]) or ""),
-        },
-        "packages": {
-            package_name: _package_version(package_name)
-            for package_name in ("torch", "sglang", "sglang-omni", "transformers")
-        },
-        "dependency_freeze_sha256": (
-            hashlib.sha256(pip_freeze.encode("utf-8")).hexdigest()
-            if pip_freeze
-            else None
-        ),
-        "gpus": _run_command(
-            [
-                "nvidia-smi",
-                "--query-gpu=index,name,driver_version,memory.total",
-                "--format=csv,noheader",
-            ]
-        ),
-        "env": {
-            env_name: os.environ.get(env_name) for env_name in _FINGERPRINT_ENV_KEYS
-        },
-    }
-    if not model_path:
-        return fingerprint
-    return {
-        **fingerprint,
-        "model_path": model_path,
-        "model_revision": _cached_hf_revision(model_path),
-    }
-
-
-def _cached_hf_revision(model_path: str) -> str | None:
-    """Resolve the locally cached HF snapshot revision for a repo id."""
-    if os.path.sep in model_path and os.path.isdir(model_path):
-        return None
-    hf_home = os.environ.get("HF_HOME") or os.path.join(
-        os.path.expanduser("~"), ".cache", "huggingface"
-    )
-    repo_dir = os.path.join(hf_home, "hub", "models--" + model_path.replace("/", "--"))
-    ref_main = os.path.join(repo_dir, "refs", "main")
-    try:
-        with open(ref_main, encoding="utf-8") as handle:
-            return handle.read().strip() or None
-    except OSError:
-        return None
 
 
 def write_json(path: str, payload: Any) -> None:

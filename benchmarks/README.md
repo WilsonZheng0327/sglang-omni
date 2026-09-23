@@ -215,8 +215,10 @@ and MOSS-TTS. MOSS-TTS additionally supports duration control through
 `--repetition-penalty` are recorded in the speed results. Reference audio on
 this endpoint is a filesystem path, so it is not client-encoded inside the
 request timer. `--concurrencies 1,16 --repeats 5 --generate-only` repeats each
-level: one repeat keeps directories `c<level>`, and further repeats write
-`c<level>_r<repeat>` plus mean/min/max in `concurrency_sweep.json`.
+level. One repeat keeps the directory `c<level>`; further repeats write
+`c<level>_r<repeat>`. Every row in `concurrency_sweep.json` is an aggregate
+of the same speed metrics as the Omni sweep, with `per_repeat` holding each
+raw summary.
 `--fingerprint` records the client environment and the server `/v1/models`
 identity.
 
