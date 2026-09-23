@@ -11,12 +11,11 @@ from sglang_omni.models.personaplex.components.causal_conv import (
     CausalConv1d,
     CausalConvTranspose1d,
 )
-from sglang_omni.models.personaplex.components.mimi import (
+from sglang_omni.models.personaplex.components.mimi import MimiCodec, rename_mimi_key
+from sglang_omni.models.personaplex.components.mimi_transformer import (
     AttentionState,
     MimiAttention,
-    MimiCodec,
     MimiTransformer,
-    rename_mimi_key,
 )
 
 
