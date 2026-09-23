@@ -87,20 +87,11 @@ def _extra_params(args: argparse.Namespace) -> dict:
         params["text_prompt"] = args.text_prompt
     if args.greedy:
         params["audio_temperature"] = 0.0
-    for key in ("audio_temperature", "audio_top_k", "seed", "top_k"):
+    for key in ("audio_temperature", "audio_top_k", "seed"):
         value = getattr(args, key)
         if value is not None:
             params[key] = value
     return params
-
-
-def _explicit_fields(args: argparse.Namespace) -> list[str]:
-    fields = []
-    if args.greedy or args.temperature is not None:
-        fields.append("temperature")
-    if args.top_k is not None:
-        fields.append("top_k")
-    return fields
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -108,7 +99,6 @@ async def run(args: argparse.Namespace) -> int:
     from sglang_omni.config.manager import ConfigManager
     from sglang_omni.models.personaplex.config import PersonaPlexPipelineConfig
     from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
-    from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
 
     config = PersonaPlexPipelineConfig(model_path=args.model_path)
     if args.stage_overrides:
@@ -120,19 +110,25 @@ async def run(args: argparse.Namespace) -> int:
     await runner.start(timeout=args.startup_timeout)
     print(f"pipeline ready in {time.perf_counter() - started:.0f}s")
 
-    temperature = 0.0 if args.greedy else args.temperature
+    # Note (wilsonzheng0327): Only the fields set here count as chosen; the rest keep
+    # PersonaPlex's own defaults.
+    text_sampling = {
+        "temperature": 0.0 if args.greedy else args.temperature,
+        "top_k": args.top_k,
+    }
     try:
         client = Client(runner.coordinator)
         request = GenerateRequest(
             model=config.name,
             prompt={"audio_path": args.audio},
-            sampling=(
-                SamplingParams(temperature=temperature)
-                if temperature is not None
-                else SamplingParams()
+            sampling=SamplingParams(
+                **{
+                    key: value
+                    for key, value in text_sampling.items()
+                    if value is not None
+                }
             ),
             extra_params=_extra_params(args),
-            metadata={EXPLICIT_GENERATION_PARAMS_KEY: _explicit_fields(args)},
             output_modalities=["text", "audio"],
             stream=False,
         )

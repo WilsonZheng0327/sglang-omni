@@ -901,8 +901,8 @@ that happened to contain an older version of the test.
   per-request streaming code2wav and abort cleanup, preprocessing (caller
   channel, `audios` input, role prompt, voice resolution, `stage_params`),
   voice-archive unpacking (read-only fallback, no partial folder), and
-  request lowering (decode budget, reference sampling defaults over client
-  filler values, seeds, stream chunks, context limit, input validation). CPU
+  request lowering (decode budget, reference sampling defaults unless the
+  caller set a field, seeds, stream chunks, context limit, input validation). CPU
   only, no weights; runner and request tests need SGLang but start no engine.
 
 - `unit_test/llada2_uni/`: LLaDA2-Uni request lowering to the upstream

@@ -58,7 +58,7 @@ curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -
 |---|---|
 | `voice` | A packaged voice name (`NATF0..3`, `NATM0..3`, `VARF0..4`, `VARM0..4`), a `.pt` file, or a recording. Default `NATF2`; an empty string runs without a voice prompt. |
 | `text_prompt` (or `instructions`) | The role prompt, wrapped in `<system>` tags. Default: the reference assistant prompt. |
-| `temperature`, `top_k` | Text sampling; defaults 0.7 / 25, which the client's filler values (1.0 / -1) do not override unless set explicitly. `temperature=0` is greedy. |
+| `temperature`, `top_k` | Text sampling; defaults 0.7 / 25 unless the request sets them. `temperature=0` is greedy. |
 | `audio_temperature`, `audio_top_k` | Code sampling in the depformer; defaults 0.8 / 250. |
 | `seed` | Makes both draws reproducible (a child seed each for text and audio). |
 | `max_new_tokens` | Ignored; the frame count is fixed by the input length. |

@@ -10,16 +10,33 @@ from huggingface_hub.errors import (
 )
 from huggingface_hub.utils import HFValidationError
 
-from sglang_omni.utils.hf import try_resolve_arch_from_personaplex_layout
+from sglang_omni.config.manager import resolve_config_cls_for_model_path
+from sglang_omni.models.personaplex.config import PersonaPlexPipelineConfig
+from sglang_omni.utils.hf import (
+    PERSONAPLEX_ARCHITECTURE,
+    PERSONAPLEX_LAYOUT_MARKER,
+    try_resolve_arch_from_layout_marker,
+)
 
 ARCH = "PersonaPlexForCausalLM"
 NOT_FOUND = httpx.Response(404, request=httpx.Request("GET", "https://huggingface.co"))
 
 
+def resolve(model_path: str) -> str | None:
+    return try_resolve_arch_from_layout_marker(
+        model_path, PERSONAPLEX_LAYOUT_MARKER, PERSONAPLEX_ARCHITECTURE
+    )
+
+
 def test_local_tokenizer_marks_the_layout(tmp_path):
-    assert try_resolve_arch_from_personaplex_layout(str(tmp_path)) is None
+    assert resolve(str(tmp_path)) is None
     (tmp_path / "tokenizer_spm_32k_3.model").write_bytes(b"")
-    assert try_resolve_arch_from_personaplex_layout(str(tmp_path)) == ARCH
+    assert resolve(str(tmp_path)) == ARCH
+
+
+def test_local_checkpoint_selects_the_personaplex_pipeline(tmp_path):
+    (tmp_path / "tokenizer_spm_32k_3.model").write_bytes(b"")
+    assert resolve_config_cls_for_model_path(str(tmp_path)) is PersonaPlexPipelineConfig
 
 
 def hub_download_raising(exc):
@@ -42,7 +59,7 @@ def test_hub_lookup_misses_are_not_personaplex(monkeypatch, exc):
     monkeypatch.setattr(
         "sglang_omni.utils.hf.hf_hub_download", hub_download_raising(exc)
     )
-    assert try_resolve_arch_from_personaplex_layout("org/other-model") is None
+    assert resolve("org/other-model") is None
 
 
 def test_unexpected_hub_failures_propagate(monkeypatch):
@@ -51,11 +68,11 @@ def test_unexpected_hub_failures_propagate(monkeypatch):
         hub_download_raising(RuntimeError("bug")),
     )
     with pytest.raises(RuntimeError, match="bug"):
-        try_resolve_arch_from_personaplex_layout("org/other-model")
+        resolve("org/other-model")
 
 
 def test_hub_marker_resolves(monkeypatch):
     monkeypatch.setattr(
         "sglang_omni.utils.hf.hf_hub_download", lambda **_: "/cache/marker"
     )
-    assert try_resolve_arch_from_personaplex_layout("nvidia/personaplex-7b-v1") == ARCH
+    assert resolve("nvidia/personaplex-7b-v1") == ARCH

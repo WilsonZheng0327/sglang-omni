@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 from sglang.srt.managers.schedule_batch import Req
@@ -21,6 +22,7 @@ from sglang_omni.models.personaplex.architecture import (
 )
 from sglang_omni.models.personaplex.config import CODE2WAV_STAGE, LM_STAGE
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
+from sglang_omni.models.personaplex.prompts import VoicePrompt, load_packaged_voice
 from sglang_omni.models.personaplex.sampling import AudioSampling
 from sglang_omni.models.personaplex.timeline import (
     Timeline,
@@ -33,9 +35,6 @@ from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
 
 SEED_NAMESPACE = "personaplex"
-# Note (wilsonzheng0327): The client fills these into every request, so a value equal
-# to one of them only counts when the caller listed the field as explicit.
-CLIENT_FILLER_VALUES = {"temperature": 1.0, "top_k": -1}
 
 
 @dataclass(frozen=True)
@@ -62,7 +61,7 @@ class RequestSampling:
         )
 
 
-def stage_param_overrides(params: dict, stage: str) -> dict:
+def stage_overrides(params: dict, stage: str) -> dict:
     stage_params = params.get("stage_params")
     overrides = stage_params.get(stage) if isinstance(stage_params, dict) else None
     return overrides if isinstance(overrides, dict) else {}
@@ -74,40 +73,24 @@ def stage_request_params(params: dict, stage: str) -> dict:
     The in-process client can set PersonaPlex options at the top level; an HTTP
     request reaches them only through stage_params.
     """
-    return {**params, **stage_param_overrides(params, stage)}
+    return {**params, **stage_overrides(params, stage)}
 
 
-def param_or_default(params: dict, key: str, default, cast):
+def request_param(params: dict, key: str, default, cast):
     value = params.get(key)
     return default if value is None else cast(value)
-
-
-def chosen_text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
-    """The first value a caller actually chose, from (params, explicit) sources."""
-    for params, explicit in sources:
-        value = params.get(key)
-        if value is None:
-            continue
-        else:
-            pass
-        if not explicit and value == CLIENT_FILLER_VALUES[key]:
-            continue
-        else:
-            pass
-        return cast(value)
-    return default
 
 
 def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
     """temperature/top_k steer the text, audio_temperature /
     audio_top_k the codes; seed makes both draws reproducible.
 
-    Text values equal to the client's filler defaults fall back to the
-    reference defaults unless explicit_fields names them or they come from
-    stage_params, which the client never fills.
+    Text values come from stage_sampling or stage_params for the lm stage, or
+    from the top level when explicit_fields names them; the client fills the
+    top level for every request, so anything else keeps the reference default.
     """
     stage_sampling = (params.get("stage_sampling") or {}).get(LM_STAGE) or {}
-    lm_overrides = stage_param_overrides(params, LM_STAGE)
+    lm_overrides = stage_overrides(params, LM_STAGE)
     lm_params = {**params, **lm_overrides}
     explicit = set(explicit_fields)
     seed = lm_params.get("seed")
@@ -117,56 +100,73 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
         pass
 
     def text(key: str, default, cast):
-        sources = [
-            (stage_sampling, False),
-            (lm_overrides, True),
-            (params, key in explicit),
-        ]
-        return chosen_text_param(sources, key, default, cast)
+        top_level = params if key in explicit else {}
+        for source in (stage_sampling, lm_overrides, top_level):
+            if source.get(key) is not None:
+                return cast(source[key])
+            else:
+                pass
+        return default
 
     return RequestSampling(
         text_temperature=text("temperature", DEFAULT_TEXT_TEMPERATURE, float),
         text_top_k=text("top_k", DEFAULT_TEXT_TOP_K, int),
         audio=AudioSampling(
-            temperature=param_or_default(
+            temperature=request_param(
                 lm_params, "audio_temperature", DEFAULT_AUDIO_TEMPERATURE, float
             ),
-            top_k=param_or_default(lm_params, "audio_top_k", DEFAULT_AUDIO_TOP_K, int),
+            top_k=request_param(lm_params, "audio_top_k", DEFAULT_AUDIO_TOP_K, int),
         ),
         seed=None if seed is None else int(seed),
     )
 
 
-def timeline_from_state(state: PersonaPlexState) -> Timeline:
+def timeline_from_state(
+    state: PersonaPlexState, packaged_voice: VoicePrompt | None = None
+) -> Timeline:
     if state.user_codes is None:
         raise ValueError("PersonaPlex LM request has no encoded caller audio")
     else:
         pass
+    voice = packaged_voice or VoicePrompt(frames=int(state.voice_frames))
     voice_codes = state.voice_codes
     prompt = build_prompt_frames(
-        voice_frames=int(state.voice_frames),
+        voice_frames=voice.frames,
         text_prompt_ids=[int(i) for i in state.text_prompt_ids],
         voice_codes=None if voice_codes is None else voice_codes.to(torch.long),
     )
     return build_timeline(
         prompt,
         state.user_codes.to(torch.long),
-        voice_embeddings=state.voice_embeddings,
-        voice_tail_codes=(
-            None
-            if state.voice_tail_codes is None
-            else state.voice_tail_codes.to(torch.long)
-        ),
+        voice_embeddings=voice.embeddings,
+        voice_tail_codes=voice.tail_codes,
     )
 
 
 def build_lm_request(
-    payload: StagePayload, *, vocab_size: int, context_length: int | None = None
+    payload: StagePayload,
+    *,
+    vocab_size: int,
+    voice_cache: dict[str, VoicePrompt],
+    context_length: int | None = None,
 ) -> SGLangARRequestData:
     """One request per recording: the whole prompt as prefill, then one
-    decode step per 80 ms frame of the caller's audio."""
+    decode step per 80 ms frame of the caller's audio.
+
+    voice_cache holds the packaged voices this stage has loaded, by path.
+    """
     state = PersonaPlexState.from_dict(payload.data)
-    timeline = timeline_from_state(state)
+    packaged_voice = None
+    if state.voice_path is not None:
+        packaged_voice = voice_cache.get(state.voice_path)
+        if packaged_voice is None:
+            packaged_voice = load_packaged_voice(Path(state.voice_path))
+            voice_cache[state.voice_path] = packaged_voice
+        else:
+            pass
+    else:
+        pass
+    timeline = timeline_from_state(state, packaged_voice)
     metadata = payload.request.metadata or {}
     sampling = resolve_sampling(
         payload.request.params, metadata.get(EXPLICIT_GENERATION_PARAMS_KEY) or ()
@@ -241,8 +241,7 @@ def apply_lm_result(data: SGLangARRequestData) -> StagePayload:
     for name in (
         "waveform",
         "voice_waveform",
-        "voice_embeddings",
-        "voice_tail_codes",
+        "voice_path",
         "user_codes",
         "voice_codes",
     ):

@@ -8,7 +8,6 @@ from pydantic import Field
 from sglang_omni.config import (
     EngineArgs,
     EngineStageConfig,
-    FactoryArgs,
     PipelineConfig,
     PlacementConfig,
     StageConfig,
@@ -40,7 +39,6 @@ def personaplex_stages_factory() -> list[StageConfig]:
             name=LM_STAGE,
             process="lm",
             factory_path=f"{MODEL_STAGES_PREFIX}.create_lm_executor",
-            factory=FactoryArgs(dtype="bfloat16"),
             gpu=0,
             engine=EngineArgs(mem_fraction_static=0.3),
             next=["decode", CODE2WAV_STAGE],

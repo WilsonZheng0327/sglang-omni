@@ -24,10 +24,11 @@ from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.prompts import (
     DEFAULT_TEXT_PROMPT,
     DEFAULT_VOICE,
+    PACKAGED_VOICE_SUFFIX,
     VoicePrompt,
     decode_text,
+    load_recorded_voice,
     load_text_tokenizer,
-    load_voice_prompt,
     pad_to_whole_frames,
     resolve_voice_path,
     tokenize_text_prompt,
@@ -79,7 +80,7 @@ def request_text_prompt(params: dict) -> str | None:
 def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
     model_dir = Path(resolve_model_path(model_path))
     tokenizer = load_text_tokenizer(model_dir)
-    voice_cache: dict[Path, VoicePrompt] = {}
+    recorded_voices: dict[Path, VoicePrompt] = {}
 
     def preprocess(payload: StagePayload) -> StagePayload:
         params = stage_request_params(payload.request.params, PREPROCESSING_STAGE)
@@ -100,21 +101,24 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
         voice = params.get("voice", DEFAULT_VOICE)
         if voice:
             path = resolve_voice_path(model_dir, str(voice))
-            prompt = voice_cache.get(path)
-            if prompt is None:
-                prompt = load_voice_prompt(
-                    path,
-                    load_audio=lambda p: load_channels(
-                        p, source_name="PersonaPlex voice"
-                    ),
-                )
-                voice_cache[path] = prompt
+            if path.suffix == PACKAGED_VOICE_SUFFIX:
+                # Note (wilsonzheng0327): The LM stage loads and caches packaged voices,
+                # so only the path travels.
+                state.voice_path = str(path.resolve())
             else:
-                pass
-            state.voice_frames = prompt.frames
-            state.voice_embeddings = prompt.embeddings
-            state.voice_tail_codes = prompt.tail_codes
-            state.voice_waveform = prompt.waveform
+                prompt = recorded_voices.get(path)
+                if prompt is None:
+                    prompt = load_recorded_voice(
+                        path,
+                        load_audio=lambda p: load_channels(
+                            p, source_name="PersonaPlex voice"
+                        ),
+                    )
+                    recorded_voices[path] = prompt
+                else:
+                    pass
+                state.voice_frames = prompt.frames
+                state.voice_waveform = prompt.waveform
         else:
             pass
         payload.data = state.to_dict()
@@ -161,26 +165,17 @@ def create_mimi_encode_executor(
 def create_lm_executor(
     model_path: str,
     *,
-    dtype: str | None = None,
+    dtype: str = "bfloat16",
     device: str | None = None,
     gpu_id: int | None = None,
-    context_length: int | None = None,
     server_args_overrides: dict[str, object] | None = None,
-    **overrides: object,
 ):
-    server_args_overrides = {**overrides, **(server_args_overrides or {})}
-    # Note (wilsonzheng0327): The shim config is written before the engine reads its
-    # overrides, so an engine context_length must reach the builder too.
-    context_length = server_args_overrides.get("context_length", context_length)
-    builder = PersonaPlexEngineBuilder(
-        max_running_requests=1, context_length=context_length
-    )
-    return builder.build(
+    return PersonaPlexEngineBuilder().build(
         model_path,
         device=device,
         gpu_id=gpu_id,
-        dtype=dtype or "bfloat16",
-        server_args_overrides=server_args_overrides or None,
+        dtype=dtype,
+        server_args_overrides=server_args_overrides,
     )
 
 

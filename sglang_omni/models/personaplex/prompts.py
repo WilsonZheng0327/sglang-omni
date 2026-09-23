@@ -34,7 +34,8 @@ TEXT_TOKENIZER_NAME = "tokenizer_spm_32k_3.model"
 VOICES_ARCHIVE_NAME = "voices.tgz"
 VOICES_DIR_NAME = "voices"
 VOICE_PROMPT_TARGET_LUFS = -24.0
-VOICE_SUFFIXES = (".pt", ".wav", ".flac", ".mp3", ".ogg")
+PACKAGED_VOICE_SUFFIX = ".pt"
+VOICE_SUFFIXES = (PACKAGED_VOICE_SUFFIX, ".wav", ".flac", ".mp3", ".ogg")
 
 DEFAULT_TEXT_PROMPT = (
     "You are a wise and friendly teacher. Answer questions or provide advice "
@@ -169,7 +170,7 @@ def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
             return candidate
         else:
             pass
-    available = sorted(p.stem for p in folder.glob("*.pt"))
+    available = sorted(p.stem for p in folder.glob(f"*{PACKAGED_VOICE_SUFFIX}"))
     raise FileNotFoundError(f"unknown voice {voice!r}; packaged voices: {available}")
 
 
@@ -197,26 +198,23 @@ def pad_to_whole_frames(waveform: torch.Tensor) -> torch.Tensor:
     return waveform
 
 
-def load_voice_prompt(
-    path: str | Path, *, load_audio: Callable[[str], np.ndarray]
+def load_packaged_voice(path: Path) -> VoicePrompt:
+    saved = torch.load(path, map_location="cpu", weights_only=True)
+    embeddings = saved["embeddings"]
+    embeddings = embeddings.reshape(embeddings.shape[0], -1).to(torch.float32)
+    frames = int(embeddings.shape[0]) + 1
+    return VoicePrompt(
+        frames=frames,
+        embeddings=embeddings,
+        tail_codes=voice_tail_codes_from_cache(saved["cache"].to(torch.long), frames),
+    )
+
+
+def load_recorded_voice(
+    path: Path, *, load_audio: Callable[[str], np.ndarray]
 ) -> VoicePrompt:
     """load_audio(path) must return the recording as [channels, samples]
     float at 24 kHz; only the first channel is the voice."""
-    path = Path(path)
-    if path.suffix == ".pt":
-        saved = torch.load(path, map_location="cpu", weights_only=True)
-        embeddings = saved["embeddings"]
-        embeddings = embeddings.reshape(embeddings.shape[0], -1).to(torch.float32)
-        frames = int(embeddings.shape[0]) + 1
-        return VoicePrompt(
-            frames=frames,
-            embeddings=embeddings,
-            tail_codes=voice_tail_codes_from_cache(
-                saved["cache"].to(torch.long), frames
-            ),
-        )
-    else:
-        pass
     channels = np.asarray(load_audio(str(path)), dtype=np.float32)
     mono = channels[0] if channels.ndim == 2 else channels
     mono = normalize_loudness(
@@ -231,10 +229,12 @@ def load_voice_prompt(
 __all__ = [
     "DEFAULT_TEXT_PROMPT",
     "DEFAULT_VOICE",
+    "PACKAGED_VOICE_SUFFIX",
     "VoicePrompt",
     "decode_text",
     "load_text_tokenizer",
-    "load_voice_prompt",
+    "load_packaged_voice",
+    "load_recorded_voice",
     "normalize_loudness",
     "pad_to_whole_frames",
     "resolve_voice_path",

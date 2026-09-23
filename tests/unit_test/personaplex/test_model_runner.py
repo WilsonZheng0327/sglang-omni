@@ -13,6 +13,7 @@ from sglang_omni.models.personaplex.architecture import (
 )
 from sglang_omni.models.personaplex.model_runner import PersonaPlexModelRunner
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
+from sglang_omni.models.personaplex.prompts import VoicePrompt
 from sglang_omni.models.personaplex.request_builders import build_lm_request
 from sglang_omni.models.personaplex.timeline import output_frame
 from sglang_omni.proto import StagePayload
@@ -67,14 +68,20 @@ def make_request(num_frames: int, *, voice: bool = False, params=None):
         text_prompt_ids=[11, 12, 13],
         user_codes=torch.arange(num_frames * 8).view(num_frames, 8) + 500,
     )
+    voice_cache = {}
     if voice:
-        state.voice_frames = VOICE_FRAMES
-        state.voice_embeddings = torch.randn(VOICE_FRAMES - 1, NUM_STREAMS)
-        state.voice_tail_codes = torch.arange(16).view(2, 8) + 300
+        state.voice_path = "voice.pt"
+        voice_cache["voice.pt"] = VoicePrompt(
+            frames=VOICE_FRAMES,
+            embeddings=torch.randn(VOICE_FRAMES - 1, NUM_STREAMS),
+            tail_codes=torch.arange(16).view(2, 8) + 300,
+        )
     payload = StagePayload(
         "r", request=OmniRequest(inputs={}, params=params or {}), data=state.to_dict()
     )
-    return SimpleNamespace(data=build_lm_request(payload, vocab_size=32000))
+    return SimpleNamespace(
+        data=build_lm_request(payload, vocab_size=32000, voice_cache=voice_cache)
+    )
 
 
 def test_prefill_uses_stored_voice_rows_and_embeds_the_rest():

@@ -195,7 +195,6 @@ def generate(reference_outputs):
     from sglang_omni.config.manager import ConfigManager
     from sglang_omni.models.personaplex.config import PersonaPlexPipelineConfig
     from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
-    from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
 
     config = PersonaPlexPipelineConfig(
         model_path=os.environ.get("PERSONAPLEX_PARITY_CHECKPOINT", DEFAULT_CHECKPOINT)
@@ -234,9 +233,6 @@ def generate(reference_outputs):
             prompt={"audio_path": str(audio_path)},
             sampling=SamplingParams(temperature=0.0) if greedy else SamplingParams(),
             extra_params=extra,
-            metadata={
-                EXPLICIT_GENERATION_PARAMS_KEY: ["temperature"] if greedy else []
-            },
             output_modalities=["text", "audio"],
             stream=False,
         )

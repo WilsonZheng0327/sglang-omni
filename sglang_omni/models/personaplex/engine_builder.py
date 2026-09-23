@@ -16,6 +16,7 @@ from sglang_omni.models.personaplex.hf_config import (
     build_backbone_config,
 )
 from sglang_omni.models.personaplex.model_runner import PersonaPlexModelRunner
+from sglang_omni.models.personaplex.prompts import VoicePrompt
 from sglang_omni.models.personaplex.request_builders import (
     apply_lm_result,
     build_lm_request,
@@ -49,17 +50,8 @@ def shim_checkpoint_dir(source: Path, *, context_length: int) -> Path:
 class PersonaPlexEngineBuilder(TtsEngineBuilder):
     model_name = "personaplex"
     context_length = DEFAULT_CONTEXT_LENGTH
+    model_arch_override = PERSONAPLEX_ARCH
     supports_context_length_override = True
-
-    def __init__(
-        self, *, max_running_requests: int = 1, context_length: int | None = None
-    ) -> None:
-        self.max_running_requests = max_running_requests
-        self.model_arch_override = PERSONAPLEX_ARCH
-        if context_length is not None:
-            self.context_length = int(context_length)
-        else:
-            pass
 
     def resolve_checkpoint(self, model_path):
         source = Path(resolve_model_path(model_path))
@@ -71,7 +63,9 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
             "disable_overlap_schedule": True,
             "disable_radix_cache": True,
             "enable_torch_compile": False,
-            "max_running_requests": self.max_running_requests,
+            # Note (wilsonzheng0327): Offline, one conversation at a time; the
+            # lm stage's engine.max_running_requests overrides it.
+            "max_running_requests": 1,
             "chunked_prefill_size": -1,
             "dtype": dtype,
             "trust_remote_code": False,
@@ -87,10 +81,14 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
 
     def make_adapters(self, model):
         vocab_size = int(model.config.vocab_size)
+        voice_cache: dict[str, VoicePrompt] = {}
 
         def build(payload):
             return build_lm_request(
-                payload, vocab_size=vocab_size, context_length=self.context_length
+                payload,
+                vocab_size=vocab_size,
+                voice_cache=voice_cache,
+                context_length=self.context_length,
             )
 
         return build, apply_lm_result

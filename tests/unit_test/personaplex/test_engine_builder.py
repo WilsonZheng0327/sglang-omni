@@ -45,15 +45,32 @@ def test_shim_requires_the_lm_weights(tmp_path):
         shim_checkpoint_dir(tmp_path, context_length=4096)
 
 
-def test_builder_context_length_reaches_the_shim(tmp_path):
-    assert PersonaPlexEngineBuilder().context_length == DEFAULT_CONTEXT_LENGTH
-    builder = PersonaPlexEngineBuilder(context_length=2048)
-    shim = Path(builder.resolve_checkpoint(str(write_checkpoint(tmp_path))))
+class StopAfterCheckpoint(Exception):
+    pass
+
+
+def test_engine_context_length_reaches_the_shim(tmp_path):
+    builder = PersonaPlexEngineBuilder()
+    assert builder.context_length == DEFAULT_CONTEXT_LENGTH
+    shims = []
+    make_shim = builder.resolve_checkpoint
+
+    def resolve_checkpoint(model_path):
+        shims.append(Path(make_shim(model_path)))
+        raise StopAfterCheckpoint
+
+    builder.resolve_checkpoint = resolve_checkpoint
+    with pytest.raises(StopAfterCheckpoint):
+        builder.build(
+            str(write_checkpoint(tmp_path)),
+            device="cpu",
+            server_args_overrides={"context_length": 2048},
+        )
     try:
-        config = json.loads((shim / "config.json").read_text())
+        config = json.loads((shims[0] / "config.json").read_text())
         assert config["max_position_embeddings"] == 2048
     finally:
-        shutil.rmtree(shim, ignore_errors=True)
+        shutil.rmtree(shims[0], ignore_errors=True)
 
 
 def test_generation_defaults_keep_the_runner_assumptions():

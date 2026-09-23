@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Preprocessing resolves the caller channel, the role prompt and the voice per request."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
 
+from sglang_omni.config.runtime import resolve_stage_typed_kwargs
 from sglang_omni.models.personaplex import stages
 from sglang_omni.models.personaplex.architecture import SAMPLES_PER_FRAME
+from sglang_omni.models.personaplex.config import LM_STAGE, PersonaPlexPipelineConfig
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.prompts import (
     DEFAULT_TEXT_PROMPT,
@@ -30,13 +34,9 @@ class FakeTokenizer:
 def preprocess(monkeypatch, tmp_path):
     loads = []
 
-    def load_voice_prompt(path, *, load_audio):
-        loads.append(path)
-        return VoicePrompt(
-            frames=3,
-            embeddings=torch.zeros(2, 4),
-            tail_codes=torch.zeros(2, 8, dtype=torch.long),
-        )
+    def load_recorded_voice(path, *, load_audio):
+        loads.append(path.name)
+        return VoicePrompt(frames=3, waveform=torch.ones(3 * SAMPLES_PER_FRAME))
 
     caller = np.stack(
         [np.full(CALLER_SAMPLES, 0.5), np.full(CALLER_SAMPLES, -1.0)]
@@ -49,11 +49,13 @@ def preprocess(monkeypatch, tmp_path):
         return caller
 
     monkeypatch.setattr(stages, "load_audio", load_audio)
-    monkeypatch.setattr(stages, "resolve_voice_path", lambda _, voice: f"{voice}.pt")
-    monkeypatch.setattr(stages, "load_voice_prompt", load_voice_prompt)
+    monkeypatch.setattr(
+        stages, "resolve_voice_path", lambda _, voice: tmp_path / Path(voice).name
+    )
+    monkeypatch.setattr(stages, "load_recorded_voice", load_recorded_voice)
     scheduler = stages.create_preprocessing_executor(str(tmp_path))
 
-    def run(inputs=None, **params):
+    def run(inputs=None, raw=False, **params):
         payload = StagePayload(
             "r",
             request=OmniRequest(
@@ -61,7 +63,8 @@ def preprocess(monkeypatch, tmp_path):
             ),
             data={},
         )
-        return PersonaPlexState.from_dict(scheduler.fn(payload).data)
+        data = scheduler.fn(payload).data
+        return data if raw else PersonaPlexState.from_dict(data)
 
     run.loads = loads
     run.sources = sources
@@ -88,27 +91,34 @@ def test_role_prompt_default_alias_and_empty(preprocess):
     assert preprocess(text_prompt="").text_prompt_ids == []
 
 
-def test_voice_default_empty_and_cached(preprocess):
-    state = preprocess()
-    assert preprocess.loads == [f"{DEFAULT_VOICE}.pt"]
-    assert state.voice_frames == 3
-    assert state.voice_embeddings.shape == (2, 4)
-
-    preprocess()
-    assert preprocess.loads == [f"{DEFAULT_VOICE}.pt"]
+def test_packaged_voice_travels_as_its_path(preprocess, tmp_path):
+    payload = preprocess(voice=f"{DEFAULT_VOICE}.pt", raw=True)
+    assert payload["voice_path"] == str(tmp_path / f"{DEFAULT_VOICE}.pt")
+    assert not any(key.startswith("voice_embeddings") for key in payload)
+    assert preprocess.loads == []
 
     state = preprocess(voice="")
-    assert state.voice_frames == 0
-    assert state.voice_embeddings is None and state.voice_tail_codes is None
+    assert state.voice_path is None and state.voice_frames == 0
+
+
+def test_recorded_voice_is_loaded_once_and_sent_for_encoding(preprocess):
+    state = preprocess(voice="me.wav")
+    assert state.voice_path is None
+    assert state.voice_frames == 3
+    assert state.voice_waveform.shape == (3 * SAMPLES_PER_FRAME,)
+    preprocess(voice="me.wav")
+    assert preprocess.loads == ["me.wav"]
 
 
 def test_preprocessing_stage_params_override_top_level(preprocess):
     state = preprocess(
-        voice="NATF2",
+        voice="NATF2.wav",
         text_prompt="Be brief",
-        stage_params={"preprocessing": {"voice": "NATM1", "text_prompt": "Be kind"}},
+        stage_params={
+            "preprocessing": {"voice": "NATM1.wav", "text_prompt": "Be kind"}
+        },
     )
-    assert preprocess.loads == ["NATM1.pt"]
+    assert preprocess.loads == ["NATM1.wav"]
     assert state.text_prompt_ids == [8, 2, 4, 8]
 
 
@@ -120,23 +130,19 @@ def test_chat_completions_audios_supply_the_caller(preprocess):
     assert is_bad_request_error(error.value)
 
 
-def test_engine_context_length_reaches_the_builder(monkeypatch):
+def test_lm_factory_forwards_the_stage_config(monkeypatch):
     built = {}
 
     class Builder:
-        def __init__(self, *, max_running_requests, context_length):
-            built["context_length"] = context_length
-
         def build(self, model_path, **kwargs):
-            built["overrides"] = kwargs["server_args_overrides"]
+            built.update(kwargs)
 
     monkeypatch.setattr(stages, "PersonaPlexEngineBuilder", Builder)
-    stages.create_lm_executor("m", server_args_overrides={"context_length": 16384})
-    assert built["context_length"] == 16384
-    assert built["overrides"] == {"context_length": 16384}
-
-    stages.create_lm_executor("m", context_length=4096)
-    assert built["context_length"] == 4096 and built["overrides"] is None
+    config = PersonaPlexPipelineConfig(model_path="m")
+    lm_stage = next(stage for stage in config.stages if stage.name == LM_STAGE)
+    stages.create_lm_executor("m", **resolve_stage_typed_kwargs(lm_stage))
+    assert built["dtype"] == "bfloat16"
+    assert built["server_args_overrides"] == {"mem_fraction_static": 0.3}
 
 
 def test_whole_reply_decode_is_cut_back_to_the_caller_length(monkeypatch):
