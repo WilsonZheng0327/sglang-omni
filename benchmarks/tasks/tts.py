@@ -792,6 +792,25 @@ class TalkerSamplingParams(TypedDict, total=False):
     talker_repetition_penalty: float
 
 
+def talker_sampling_params(
+    *,
+    talker_temperature: float | None,
+    talker_top_p: float | None,
+    talker_top_k: int | None,
+    talker_repetition_penalty: float | None,
+) -> TalkerSamplingParams:
+    talker_params: TalkerSamplingParams = {}
+    if talker_temperature is not None:
+        talker_params["talker_temperature"] = talker_temperature
+    if talker_top_p is not None:
+        talker_params["talker_top_p"] = talker_top_p
+    if talker_top_k is not None:
+        talker_params["talker_top_k"] = talker_top_k
+    if talker_repetition_penalty is not None:
+        talker_params["talker_repetition_penalty"] = talker_repetition_penalty
+    return talker_params
+
+
 class VoiceCloneOmni:
     """Voice cloning via /v1/chat/completions (Omni API format).
 

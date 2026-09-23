@@ -211,7 +211,22 @@ an ASR server to avoid GPU contention with the TTS server. Use `--generate-only`
 payloads: the default `--ref-format flat` sends `ref_audio`/`ref_text`, while
 `--ref-format references` sends `references=[{audio_path, text}]` for Higgs TTS
 and MOSS-TTS. MOSS-TTS additionally supports duration control through
-`--token-count`.
+`--token-count`. `--seed`, `--temperature`, `--top-p`, `--top-k`, and
+`--repetition-penalty` are recorded in the speed results. Reference audio on
+this endpoint is a filesystem path, so it is not client-encoded inside the
+request timer. `--concurrencies 1,16 --repeats 5 --generate-only` repeats each
+level: one repeat keeps directories `c<level>`, and further repeats write
+`c<level>_r<repeat>` plus mean/min/max in `concurrency_sweep.json`.
+`--fingerprint` records the client environment and the server `/v1/models`
+identity.
+
+Chat-completion speed runs forward `--seed` on the request when it is set
+(MMSU, MMAU, and MMAR also use it to shuffle the dataset) and accept
+`--fingerprint`. `benchmark_omni_streaming_ttft.py` uses one `--seed` for
+warmup and every measured repeat, and records talker sampling knobs.
+`benchmark_omni_rollout_stress.py` derives request seed `base + index` from
+`--seed` so rollouts differ but stay reproducible. The realtime ASR client
+base64-encodes packets before the first-send timestamp.
 
 `benchmark_omni_seedtts.py` documents local vs CI GPU usage in its module
 docstring (sequential phases on CI to reduce OOM risk).
