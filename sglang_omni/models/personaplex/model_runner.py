@@ -175,13 +175,7 @@ class PersonaPlexModelRunner(ModelRunner):
         sampled = result.next_token_ids
         for index, request in enumerate(requests):
             inputs = request.data.talker_model_inputs
-            forced = inputs.pop("prefill_forced", None)
-            if forced is None:
-                forced = self.request_timeline(request.data).forced_agent_at_start.to(
-                    self.model_device
-                )
-            else:
-                pass
+            forced = inputs.pop("prefill_forced")
             self.spell_frame(index, request, sampled[index], forced)
 
     def before_decode(

@@ -114,6 +114,11 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     data = request.data
     timeline = data.talker_model_inputs["timeline"]
     first_position = timeline.num_prompt_positions
+    runner.before_prefill(
+        SimpleNamespace(replace_embeds=None, input_ids=torch.zeros(first_position)),
+        SimpleNamespace(reqs=[SimpleNamespace(output_ids=[])]),
+        [request],
+    )
 
     runner.post_prefill(
         SimpleNamespace(next_token_ids=torch.tensor([77])), None, None, [request]
