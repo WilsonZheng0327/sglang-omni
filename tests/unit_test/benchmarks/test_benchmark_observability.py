@@ -107,6 +107,35 @@ def test_sweep_aggregate_uses_the_shared_metric_names() -> None:
         assert set(row[metric_name]) == {"mean", "min", "max", "n"}
 
 
+def test_sweep_aggregate_records_warmup_and_time_to_first_audio() -> None:
+    row = aggregate_repeats(
+        1,
+        [
+            {
+                "repeat": 1,
+                "output_dir": "c1_r1",
+                "completed_requests": 1,
+                "failed_requests": 0,
+                "warmup": 2,
+                "audio_ttfp_mean_s": 0.25,
+                "audio_ttfp_p95_s": 0.5,
+            },
+            {
+                "repeat": 2,
+                "output_dir": "c1_r2",
+                "completed_requests": 1,
+                "failed_requests": 0,
+                "warmup": 2,
+                "audio_ttfp_mean_s": 0.75,
+                "audio_ttfp_p95_s": None,
+            },
+        ],
+    )
+    assert row["warmup"] == {"mean": 2.0, "min": 2.0, "max": 2.0, "n": 2}
+    assert row["audio_ttfp_mean_s"] == {"mean": 0.5, "min": 0.25, "max": 0.75, "n": 2}
+    assert row["audio_ttfp_p95_s"] == {"mean": 0.5, "min": 0.5, "max": 0.5, "n": 1}
+
+
 def test_fingerprint_fields_skip_collection_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

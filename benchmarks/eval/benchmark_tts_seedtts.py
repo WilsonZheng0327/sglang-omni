@@ -681,6 +681,7 @@ async def run_tts_concurrency_sweep(
                     "repeat": repeat_index,
                     "output_dir": point_output_dir,
                     **summary,
+                    "warmup": _resolve_warmup(point),
                 }
             )
             print_speed_summary(summary, config.model, concurrency=concurrency)

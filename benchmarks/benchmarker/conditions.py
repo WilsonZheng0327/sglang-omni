@@ -34,8 +34,11 @@ SweepMetricName = Literal[
     "latency_median_s",
     "latency_p95_s",
     "latency_p99_s",
+    "audio_ttfp_mean_s",
+    "audio_ttfp_p95_s",
     "rtf_mean",
     "audio_duration_mean_s",
+    "warmup",
 ]
 SWEEP_METRIC_NAMES: tuple[SweepMetricName, ...] = (
     "throughput_qps",
@@ -44,8 +47,11 @@ SWEEP_METRIC_NAMES: tuple[SweepMetricName, ...] = (
     "latency_median_s",
     "latency_p95_s",
     "latency_p99_s",
+    "audio_ttfp_mean_s",
+    "audio_ttfp_p95_s",
     "rtf_mean",
     "audio_duration_mean_s",
+    "warmup",
 )
 
 
@@ -60,8 +66,11 @@ class RepeatSpeedSummary(TypedDict, total=False):
     latency_median_s: float
     latency_p95_s: float
     latency_p99_s: float
+    audio_ttfp_mean_s: float
+    audio_ttfp_p95_s: float
     rtf_mean: float | None
     audio_duration_mean_s: float
+    warmup: int
 
 
 class ConcurrencyAggregate(TypedDict):
@@ -75,8 +84,11 @@ class ConcurrencyAggregate(TypedDict):
     latency_median_s: MetricAggregate
     latency_p95_s: MetricAggregate
     latency_p99_s: MetricAggregate
+    audio_ttfp_mean_s: MetricAggregate
+    audio_ttfp_p95_s: MetricAggregate
     rtf_mean: MetricAggregate
     audio_duration_mean_s: MetricAggregate
+    warmup: MetricAggregate
     per_repeat: list[RepeatSpeedSummary]
 
 
@@ -125,12 +137,12 @@ def add_talker_sampling_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--talker-repetition-penalty", type=float, default=None)
 
 
-def aggregate_numbers(values: list[float | None]) -> MetricAggregate:
+def aggregate_numbers(values: list[float | int | None]) -> MetricAggregate:
     present: list[float] = []
     for value in values:
         if value is None:
             continue
-        present.append(value)
+        present.append(float(value))
     if not present:
         return {"mean": None, "min": None, "max": None, "n": 0}
     return {
@@ -168,8 +180,11 @@ def aggregate_repeats(
         "latency_median_s": aggregate_metric(summaries, "latency_median_s"),
         "latency_p95_s": aggregate_metric(summaries, "latency_p95_s"),
         "latency_p99_s": aggregate_metric(summaries, "latency_p99_s"),
+        "audio_ttfp_mean_s": aggregate_metric(summaries, "audio_ttfp_mean_s"),
+        "audio_ttfp_p95_s": aggregate_metric(summaries, "audio_ttfp_p95_s"),
         "rtf_mean": aggregate_metric(summaries, "rtf_mean"),
         "audio_duration_mean_s": aggregate_metric(summaries, "audio_duration_mean_s"),
+        "warmup": aggregate_metric(summaries, "warmup"),
         "per_repeat": summaries,
     }
 

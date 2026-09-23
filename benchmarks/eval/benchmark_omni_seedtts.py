@@ -672,6 +672,7 @@ def run_sweep(
                     "repeat": repeat_index,
                     "output_dir": repeat_config.output_dir,
                     **repeat_benchmark["summary"],
+                    "warmup": _resolve_warmup(repeat_config),
                 }
             )
         concurrency_aggregates.append(aggregate_repeats(concurrency, repeat_summaries))
