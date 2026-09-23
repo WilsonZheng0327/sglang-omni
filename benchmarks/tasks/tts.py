@@ -771,6 +771,18 @@ class VoiceCloneTTS:
         return transcribe_and_compute_wer(output, wav_path, asr, lang, device)
 
 
+def preload_reference_audio(samples: list[SampleInput]) -> dict[str, str]:
+    """Encode each reference WAV as a data URI, keyed by path, before timing starts."""
+    encoded: dict[str, str] = {}
+    for sample in samples:
+        if sample.ref_audio in encoded:
+            continue
+        with open(sample.ref_audio, "rb") as reference:
+            data = base64.b64encode(reference.read()).decode("ascii")
+        encoded[sample.ref_audio] = f"data:audio/wav;base64,{data}"
+    return encoded
+
+
 class VoiceCloneOmni:
     """Voice cloning via /v1/chat/completions (Omni API format).
 
@@ -789,12 +801,15 @@ class VoiceCloneOmni:
         speaker: str = "Ethan",
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        seed: int | None = None,
         voice_clone: bool = False,
         stream: bool = False,
         system_prompt: str | None = None,
         chunk_times_out: list[float] | None = None,
         text_first_time_holder: list[float] | None = None,
         reference_audio_field: ReferenceAudioField = "audios",
+        reference_audio_data: str | None = None,
+        talker_params: dict[str, float | int] | None = None,
     ) -> tuple[bytes, float, dict]:
         if max_tokens is None:
             max_tokens = self.THINKER_MAX_NEW_TOKENS
@@ -834,13 +849,20 @@ class VoiceCloneOmni:
             "temperature": temperature,
             "stream": stream,
         }
+        if seed is not None:
+            payload["seed"] = seed
+        if talker_params:
+            payload.update(talker_params)
         if voice_clone:
             if reference_audio_field == "audios":
                 payload["audios"] = [sample.ref_audio]
             elif reference_audio_field == "audio.ref_audio":
-                with open(sample.ref_audio, "rb") as reference:
-                    encoded = base64.b64encode(reference.read()).decode("ascii")
-                payload["audio"]["ref_audio"] = f"data:audio/wav;base64,{encoded}"
+                if reference_audio_data is None:
+                    raise ValueError(
+                        f"audio.ref_audio needs preloaded reference audio for "
+                        f"sample {sample.sample_id}; see preload_reference_audio"
+                    )
+                payload["audio"]["ref_audio"] = reference_audio_data
             else:
                 raise ValueError(
                     f"Unsupported reference audio field: {reference_audio_field}"
