@@ -5,14 +5,21 @@ import base64
 import io
 import json
 import wave
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from unittest.mock import AsyncMock, Mock
 
+import aiohttp
 import pytest
 
 from benchmarks.dataset.seedtts import SampleInput
 from benchmarks.eval import benchmark_omni_seedtts as benchmark
-from benchmarks.tasks.tts import VoiceCloneOmni
+from benchmarks.tasks.tts import (
+    ReferenceAudioField,
+    TalkerSamplingParams,
+    VoiceCloneOmni,
+)
 
 
 @pytest.fixture
@@ -199,8 +206,79 @@ def test_cli_selects_explicit_speaker_reference_transport() -> None:
     assert config.reference_audio_field == "audio.ref_audio"
 
 
+@dataclass(kw_only=True)
+class ForwardedSpeech:
+    sample_id: str
+    seed: int | None
+    reference_audio_data: str | None
+    talker_params: TalkerSamplingParams | None
+
+
+class RecordedGenerateSpeech(Protocol):
+    async def __call__(
+        self,
+        session: aiohttp.ClientSession,
+        api_url: str,
+        model_name: str,
+        sample: SampleInput,
+        lang: str,
+        *,
+        speaker: str = ...,
+        max_tokens: int | None = ...,
+        temperature: float = ...,
+        seed: int | None = ...,
+        voice_clone: bool = ...,
+        stream: bool = ...,
+        system_prompt: str | None = ...,
+        chunk_times_out: list[float] | None = ...,
+        text_first_time_holder: list[float] | None = ...,
+        reference_audio_field: ReferenceAudioField = ...,
+        reference_audio_data: str | None = ...,
+        talker_params: TalkerSamplingParams | None = ...,
+    ) -> tuple[bytes, float, dict[str, int]]: ...
+
+
+def recording_generate_speech(
+    forwarded: list[ForwardedSpeech],
+) -> RecordedGenerateSpeech:
+    async def generate_speech(
+        self: VoiceCloneOmni,
+        session: aiohttp.ClientSession,
+        api_url: str,
+        model_name: str,
+        sample: SampleInput,
+        lang: str,
+        *,
+        speaker: str = "Ethan",
+        max_tokens: int | None = None,
+        temperature: float = 0.7,
+        seed: int | None = None,
+        voice_clone: bool = False,
+        stream: bool = False,
+        system_prompt: str | None = None,
+        chunk_times_out: list[float] | None = None,
+        text_first_time_holder: list[float] | None = None,
+        reference_audio_field: ReferenceAudioField = "audios",
+        reference_audio_data: str | None = None,
+        talker_params: TalkerSamplingParams | None = None,
+    ) -> tuple[bytes, float, dict[str, int]]:
+        forwarded.append(
+            ForwardedSpeech(
+                sample_id=sample.sample_id,
+                seed=seed,
+                reference_audio_data=reference_audio_data,
+                talker_params=talker_params,
+            )
+        )
+        return _wav(), 0.0, {}
+
+    return generate_speech
+
+
 @pytest.mark.asyncio
-async def test_inline_reference_is_preloaded_and_seed_forwarded(monkeypatch, tmp_path):
+async def test_inline_reference_is_preloaded_and_seed_forwarded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     reference = tmp_path / "ref.wav"
     reference.write_bytes(_wav())
     meta = tmp_path / "measured.lst"
@@ -216,44 +294,57 @@ async def test_inline_reference_is_preloaded_and_seed_forwarded(monkeypatch, tmp
         disable_tqdm=True,
         output_dir=str(tmp_path / "results"),
     )
-    expected = "data:audio/wav;base64," + base64.b64encode(_wav()).decode("ascii")
-    seen = []
+    expected_reference = "data:audio/wav;base64," + base64.b64encode(_wav()).decode(
+        "ascii"
+    )
+    forwarded: list[ForwardedSpeech] = []
 
-    async def generate(self, session, url, model, sample, lang, **kwargs):
-        seen.append((kwargs["seed"], kwargs["reference_audio_data"]))
-        return _wav(), 16000, {}
+    monkeypatch.setattr(
+        benchmark.VoiceCloneOmni,
+        "generate_speech",
+        recording_generate_speech(forwarded),
+    )
+    benchmark_results = await benchmark.run_omni_seedtts_benchmark(config)
 
-    monkeypatch.setattr(benchmark.VoiceCloneOmni, "generate_speech", generate)
-    result = await benchmark.run_omni_seedtts_benchmark(config)
-
-    assert seen == [(7, expected)]
-    assert result["config"]["seed"] == 7
-    assert result["config"]["temperature"] == 0.7
+    assert forwarded == [
+        ForwardedSpeech(
+            sample_id="measured",
+            seed=7,
+            reference_audio_data=expected_reference,
+            talker_params={},
+        )
+    ]
+    assert benchmark_results["config"]["seed"] == 7
+    assert benchmark_results["config"]["temperature"] == 0.7
 
 
 @pytest.mark.asyncio
-async def test_inline_reference_requires_preloaded_data():
+async def test_inline_reference_requires_preloaded_data() -> None:
     sample = SampleInput(
-        sample_id="s", ref_text="r", ref_audio="missing.wav", target_text="t"
+        sample_id="missing-reference",
+        ref_text="reference transcript",
+        ref_audio="missing.wav",
+        target_text="target transcript",
     )
-    with pytest.raises(ValueError, match="preloaded reference audio"):
-        await VoiceCloneOmni().generate_speech(
-            None,
-            "http://localhost",
-            "test",
-            sample,
-            "en",
-            voice_clone=True,
-            reference_audio_field="audio.ref_audio",
-        )
+    async with aiohttp.ClientSession() as session:
+        with pytest.raises(ValueError, match="preloaded reference audio"):
+            await VoiceCloneOmni().generate_speech(
+                session,
+                "http://localhost",
+                "test",
+                sample,
+                "en",
+                voice_clone=True,
+                reference_audio_field="audio.ref_audio",
+            )
 
 
-def test_cli_accepts_seed():
+def test_cli_accepts_seed() -> None:
     args = benchmark._build_arg_parser().parse_args(["--seed", "3"])
     assert benchmark._config_from_args(args).seed == 3
 
 
-def test_cli_parses_talker_and_sweep_flags():
+def test_cli_parses_talker_and_sweep_flags() -> None:
     args = benchmark._build_arg_parser().parse_args(
         [
             "--talker-temperature",
@@ -273,13 +364,13 @@ def test_cli_parses_talker_and_sweep_flags():
     assert args.concurrencies == [1, 16] and args.repeats == 2
 
 
-def test_sweep_requires_generate_only(monkeypatch):
+def test_sweep_requires_generate_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["benchmark_omni_seedtts", "--concurrencies", "1"])
     with pytest.raises(SystemExit):
         benchmark.main()
 
 
-def test_results_config_records_talker_params_and_optional_fingerprint():
+def test_results_config_records_talker_params_and_optional_fingerprint() -> None:
     config = benchmark.OmniSeedttsBenchmarkConfig(
         model="test", meta="measured.lst", talker_top_p=0.9
     )
@@ -298,29 +389,37 @@ def test_results_config_records_talker_params_and_optional_fingerprint():
 
 
 @pytest.mark.asyncio
-async def test_talker_params_are_forwarded(monkeypatch, warmup_config):
+async def test_talker_params_are_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+    warmup_config: benchmark.OmniSeedttsBenchmarkConfig,
+) -> None:
     warmup_config.warmup = 0
     warmup_config.talker_temperature = 0.6
-    seen = []
+    forwarded: list[ForwardedSpeech] = []
 
-    async def generate(self, session, url, model, sample, lang, **kwargs):
-        seen.append(kwargs["talker_params"])
-        return _wav(), 16000, {}
+    monkeypatch.setattr(
+        benchmark.VoiceCloneOmni,
+        "generate_speech",
+        recording_generate_speech(forwarded),
+    )
+    benchmark_results = await benchmark.run_omni_seedtts_benchmark(warmup_config)
+    assert [call.talker_params for call in forwarded] == [{"talker_temperature": 0.6}]
+    assert benchmark_results["config"]["talker_temperature"] == 0.6
 
-    monkeypatch.setattr(benchmark.VoiceCloneOmni, "generate_speech", generate)
-    result = await benchmark.run_omni_seedtts_benchmark(warmup_config)
-    assert seen == [{"talker_temperature": 0.6}]
-    assert result["config"]["talker_temperature"] == 0.6
 
-
-def test_sweep_writes_per_level_runs_and_summary(monkeypatch, tmp_path, warmup_config):
+def test_sweep_writes_per_level_runs_and_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    warmup_config: benchmark.OmniSeedttsBenchmarkConfig,
+) -> None:
     warmup_config.warmup = 0
     warmup_config.output_dir = str(tmp_path / "sweep")
 
-    async def generate(self, session, url, model, sample, lang, **kwargs):
-        return _wav(), 16000, {}
-
-    monkeypatch.setattr(benchmark.VoiceCloneOmni, "generate_speech", generate)
+    monkeypatch.setattr(
+        benchmark.VoiceCloneOmni,
+        "generate_speech",
+        recording_generate_speech([]),
+    )
     sweep = benchmark.run_sweep(warmup_config, [1, 2], 2)
 
     assert sweep["config"]["concurrencies"] == [1, 2]
@@ -332,3 +431,17 @@ def test_sweep_writes_per_level_runs_and_summary(monkeypatch, tmp_path, warmup_c
         assert [row["repeat"] for row in level["per_repeat"]] == [1, 2]
     run_dirs = {path.name for path in (tmp_path / "sweep").iterdir()}
     assert run_dirs == {"c1_r1", "c1_r2", "c2_r1", "c2_r2", "sweep.json"}
+
+
+def test_sweep_rejects_non_positive_repeats(
+    warmup_config: benchmark.OmniSeedttsBenchmarkConfig,
+) -> None:
+    with pytest.raises(ValueError, match="repeats must be positive"):
+        benchmark.run_sweep(warmup_config, [1], 0)
+
+
+def test_sweep_rejects_empty_concurrencies(
+    warmup_config: benchmark.OmniSeedttsBenchmarkConfig,
+) -> None:
+    with pytest.raises(ValueError, match="concurrencies must not be empty"):
+        benchmark.run_sweep(warmup_config, [], 1)

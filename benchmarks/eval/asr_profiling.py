@@ -24,7 +24,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TextIO
+from typing import Any, TextIO, TypedDict
 
 import requests
 
@@ -301,14 +301,47 @@ _FINGERPRINT_ENV_KEYS = (
 )
 
 
-def collect_server_identity(base_url: str) -> dict:
+class GitFingerprint(TypedDict):
+    sha: str | None
+    branch: str | None
+    dirty: bool
+
+
+class EnvironmentFingerprint(TypedDict):
+    captured_at: str
+    hostname: str
+    platform: str
+    python: str
+    git: GitFingerprint
+    packages: dict[str, str | None]
+    dependency_freeze_sha256: str | None
+    gpus: str | None
+    env: dict[str, str | None]
+
+
+class ModelEnvironmentFingerprint(EnvironmentFingerprint):
+    model_path: str
+    model_revision: str | None
+
+
+class ServerIdentity(TypedDict):
+    url: str
+    models: list[str] | None
+
+
+class BenchmarkFingerprint(TypedDict):
+    client: EnvironmentFingerprint | ModelEnvironmentFingerprint
+    server: ServerIdentity
+
+
+def collect_server_identity(base_url: str) -> ServerIdentity:
     """Best-effort identity of the serving process under test.
 
     The client-side fingerprint describes the benchmark process; the server
     may run different code. This records what the server itself reports
     (currently its /v1/models listing) alongside the target URL.
     """
-    identity: dict[str, Any] = {"url": base_url.rstrip("/")}
+    identity: ServerIdentity = {"url": base_url.rstrip("/"), "models": None}
     try:
         response = requests.get(
             f"{base_url.rstrip('/')}/v1/models",
@@ -317,15 +350,20 @@ def collect_server_identity(base_url: str) -> dict:
         )
         response.raise_for_status()
         payload = response.json()
-        identity["models"] = [
-            entry.get("id") for entry in payload.get("data", []) if entry.get("id")
-        ]
+        model_ids: list[str] = []
+        for entry in payload.get("data", []):
+            model_id = entry.get("id")
+            if isinstance(model_id, str) and model_id:
+                model_ids.append(model_id)
+        identity["models"] = model_ids
     except (requests.RequestException, ValueError):
         identity["models"] = None
     return identity
 
 
-def collect_environment_fingerprint(model_path: str | None = None) -> dict:
+def collect_environment_fingerprint(
+    model_path: str | None = None,
+) -> EnvironmentFingerprint | ModelEnvironmentFingerprint:
     """Capture code, dependency, and hardware identity of the client process.
 
     Every field is best-effort: a missing tool (git outside a checkout,
@@ -335,7 +373,7 @@ def collect_environment_fingerprint(model_path: str | None = None) -> dict:
     coincide only when client and server share one host and checkout).
     """
     pip_freeze = _run_command([sys.executable, "-m", "pip", "freeze"])
-    fingerprint: dict[str, Any] = {
+    fingerprint: EnvironmentFingerprint = {
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "hostname": platform.node(),
         "platform": platform.platform(),
@@ -346,8 +384,8 @@ def collect_environment_fingerprint(model_path: str | None = None) -> dict:
             "dirty": bool(_run_command(["git", "status", "--porcelain"]) or ""),
         },
         "packages": {
-            name: _package_version(name)
-            for name in ("torch", "sglang", "sglang-omni", "transformers")
+            package_name: _package_version(package_name)
+            for package_name in ("torch", "sglang", "sglang-omni", "transformers")
         },
         "dependency_freeze_sha256": (
             hashlib.sha256(pip_freeze.encode("utf-8")).hexdigest()
@@ -361,12 +399,17 @@ def collect_environment_fingerprint(model_path: str | None = None) -> dict:
                 "--format=csv,noheader",
             ]
         ),
-        "env": {key: os.environ.get(key) for key in _FINGERPRINT_ENV_KEYS},
+        "env": {
+            env_name: os.environ.get(env_name) for env_name in _FINGERPRINT_ENV_KEYS
+        },
     }
-    if model_path:
-        fingerprint["model_path"] = model_path
-        fingerprint["model_revision"] = _cached_hf_revision(model_path)
-    return fingerprint
+    if not model_path:
+        return fingerprint
+    return {
+        **fingerprint,
+        "model_path": model_path,
+        "model_revision": _cached_hf_revision(model_path),
+    }
 
 
 def _cached_hf_revision(model_path: str) -> str | None:

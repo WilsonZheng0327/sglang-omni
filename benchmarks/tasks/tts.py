@@ -19,7 +19,7 @@ import logging
 import os
 import time
 import wave
-from typing import AsyncIterator, Literal, Protocol
+from typing import AsyncIterator, Literal, Protocol, TypedDict
 
 import aiohttp
 import numpy as np
@@ -773,14 +773,23 @@ class VoiceCloneTTS:
 
 def preload_reference_audio(samples: list[SampleInput]) -> dict[str, str]:
     """Encode each reference WAV as a data URI, keyed by path, before timing starts."""
-    encoded: dict[str, str] = {}
+    reference_audio_by_path: dict[str, str] = {}
     for sample in samples:
-        if sample.ref_audio in encoded:
+        if sample.ref_audio in reference_audio_by_path:
             continue
-        with open(sample.ref_audio, "rb") as reference:
-            data = base64.b64encode(reference.read()).decode("ascii")
-        encoded[sample.ref_audio] = f"data:audio/wav;base64,{data}"
-    return encoded
+        with open(sample.ref_audio, "rb") as reference_file:
+            encoded_audio = base64.b64encode(reference_file.read()).decode("ascii")
+        reference_audio_by_path[sample.ref_audio] = (
+            f"data:audio/wav;base64,{encoded_audio}"
+        )
+    return reference_audio_by_path
+
+
+class TalkerSamplingParams(TypedDict, total=False):
+    talker_temperature: float
+    talker_top_p: float
+    talker_top_k: int
+    talker_repetition_penalty: float
 
 
 class VoiceCloneOmni:
@@ -809,7 +818,7 @@ class VoiceCloneOmni:
         text_first_time_holder: list[float] | None = None,
         reference_audio_field: ReferenceAudioField = "audios",
         reference_audio_data: str | None = None,
-        talker_params: dict[str, float | int] | None = None,
+        talker_params: TalkerSamplingParams | None = None,
     ) -> tuple[bytes, float, dict]:
         if max_tokens is None:
             max_tokens = self.THINKER_MAX_NEW_TOKENS

@@ -140,6 +140,7 @@ import statistics
 import time
 from dataclasses import asdict, dataclass, replace
 from functools import partial
+from typing import Literal, Protocol, TypedDict
 
 import aiohttp
 
@@ -157,6 +158,7 @@ from benchmarks.benchmarker.utils import (
 )
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
 from benchmarks.eval.asr_profiling import (
+    BenchmarkFingerprint,
     collect_environment_fingerprint,
     collect_server_identity,
 )
@@ -171,6 +173,7 @@ from benchmarks.tasks.asr import (
 )
 from benchmarks.tasks.tts import (
     ReferenceAudioField,
+    TalkerSamplingParams,
     VoiceCloneOmni,
     build_base_url,
     preload_reference_audio,
@@ -191,7 +194,7 @@ TEXT_PREVIEW_LENGTH = 60
 DEFAULT_TTS_BENCHMARK_CONCURRENCY = int(os.getenv("TTS_BENCHMARK_CONCURRENCY", "16"))
 # note (wilsonzheng0327): below this count p99 interpolates the two slowest requests.
 TAIL_PERCENTILE_MIN_SAMPLES = 100
-SWEEP_METRICS = (
+SweepMetricName = Literal[
     "throughput_qps",
     "audio_throughput_s_per_s",
     "latency_mean_s",
@@ -200,7 +203,51 @@ SWEEP_METRICS = (
     "latency_p99_s",
     "rtf_mean",
     "audio_duration_mean_s",
-)
+]
+
+
+class MetricAggregate(TypedDict):
+    mean: float | None
+    min: float | None
+    max: float | None
+    n: int
+
+
+class RepeatSpeedSummary(TypedDict, total=False):
+    repeat: int
+    output_dir: str
+    completed_requests: int
+    failed_requests: int
+    throughput_qps: float
+    audio_throughput_s_per_s: float
+    latency_mean_s: float
+    latency_median_s: float
+    latency_p95_s: float
+    latency_p99_s: float
+    rtf_mean: float | None
+    audio_duration_mean_s: float
+
+
+class ConcurrencyAggregate(TypedDict):
+    concurrency: int
+    repeats: int
+    completed_requests: int
+    failed_requests: int
+    throughput_qps: MetricAggregate
+    audio_throughput_s_per_s: MetricAggregate
+    latency_mean_s: MetricAggregate
+    latency_median_s: MetricAggregate
+    latency_p95_s: MetricAggregate
+    latency_p99_s: MetricAggregate
+    rtf_mean: MetricAggregate
+    audio_duration_mean_s: MetricAggregate
+    per_repeat: list[RepeatSpeedSummary]
+
+
+class SampleRequestSend(Protocol):
+    async def __call__(
+        self, session: aiohttp.ClientSession, sample: SampleInput
+    ) -> RequestResult: ...
 
 
 @dataclass
@@ -229,7 +276,7 @@ class OmniSeedttsBenchmarkConfig:
     max_concurrency: int = DEFAULT_TTS_BENCHMARK_CONCURRENCY
     request_rate: float = float("inf")
     disable_tqdm: bool = False
-    environment_fingerprint: dict | None = None
+    environment_fingerprint: BenchmarkFingerprint | None = None
     # Transcribe phase
     device: str = "cuda:0"
     asr_model_path: str = QWEN3_ASR_MODEL_PATH
@@ -243,6 +290,43 @@ class OmniSeedttsBenchmarkConfig:
     system_prompt: str | None = None
 
 
+class OmniSeedttsResultsConfig(TypedDict):
+    model: str
+    base_url: str
+    meta: str
+    voice_clone: bool
+    reference_audio_field: ReferenceAudioField
+    stream: bool
+    lang: str
+    speaker: str
+    max_samples: int | None
+    max_new_tokens: int
+    temperature: float
+    seed: int | None
+    talker_temperature: float | None
+    talker_top_p: float | None
+    talker_top_k: int | None
+    talker_repetition_penalty: float | None
+    warmup: int
+    warmup_meta: str | None
+    max_concurrency: int
+    request_rate: float
+
+
+class FingerprintedOmniSeedttsResultsConfig(OmniSeedttsResultsConfig):
+    environment_fingerprint: BenchmarkFingerprint
+
+
+class SweepRunConfig(OmniSeedttsResultsConfig):
+    concurrencies: list[int]
+    repeats: int
+
+
+class SweepReport(TypedDict):
+    config: SweepRunConfig
+    results: list[ConcurrencyAggregate]
+
+
 def _resolve_warmup(config: OmniSeedttsBenchmarkConfig) -> int:
     return resolve_warmup(config.warmup, config.max_concurrency)
 
@@ -251,8 +335,8 @@ def _build_results_config(
     config: OmniSeedttsBenchmarkConfig,
     *,
     base_url: str,
-) -> dict:
-    results_config = {
+) -> OmniSeedttsResultsConfig | FingerprintedOmniSeedttsResultsConfig:
+    results_config: OmniSeedttsResultsConfig = {
         "model": config.model,
         "base_url": base_url,
         "meta": config.meta,
@@ -274,9 +358,13 @@ def _build_results_config(
         "max_concurrency": config.max_concurrency,
         "request_rate": config.request_rate,
     }
-    if config.environment_fingerprint is not None:
-        results_config["environment_fingerprint"] = config.environment_fingerprint
-    return results_config
+    if config.environment_fingerprint is None:
+        return results_config
+    fingerprinted: FingerprintedOmniSeedttsResultsConfig = {
+        **results_config,
+        "environment_fingerprint": config.environment_fingerprint,
+    }
+    return fingerprinted
 
 
 def make_send_fn(
@@ -289,7 +377,7 @@ def make_send_fn(
     max_tokens: int,
     temperature: float,
     seed: int | None,
-    talker_params: dict[str, float | int],
+    talker_params: TalkerSamplingParams,
     reference_audio_data: dict[str, str],
     stream: bool,
     save_audio_dir: str,
@@ -373,6 +461,90 @@ def make_send_fn(
     return send_fn
 
 
+def load_warmup_samples(
+    config: OmniSeedttsBenchmarkConfig, warmup_count: int
+) -> list[SampleInput]:
+    if config.warmup_meta is None or warmup_count <= 0:
+        return []
+    warmup_samples = load_seedtts_samples(
+        config.warmup_meta, warmup_count, split=config.lang
+    )
+    if len(warmup_samples) != warmup_count:
+        raise ValueError(
+            f"Requested {warmup_count} warmup samples, found {len(warmup_samples)}"
+        )
+    return warmup_samples
+
+
+def configured_talker_params(
+    config: OmniSeedttsBenchmarkConfig,
+) -> TalkerSamplingParams:
+    talker_params: TalkerSamplingParams = {}
+    if config.talker_temperature is not None:
+        talker_params["talker_temperature"] = config.talker_temperature
+    if config.talker_top_p is not None:
+        talker_params["talker_top_p"] = config.talker_top_p
+    if config.talker_top_k is not None:
+        talker_params["talker_top_k"] = config.talker_top_k
+    if config.talker_repetition_penalty is not None:
+        talker_params["talker_repetition_penalty"] = config.talker_repetition_penalty
+    return talker_params
+
+
+async def run_separate_warmup(
+    config: OmniSeedttsBenchmarkConfig,
+    *,
+    base_url: str,
+    warmup_samples: list[SampleInput],
+    warmup_count: int,
+    send_request: SampleRequestSend,
+) -> None:
+    """Run a separate warmup set and abort when any request fails."""
+
+    async def send_warmup(
+        session: aiohttp.ClientSession, sample: SampleInput
+    ) -> RequestResult:
+        try:
+            return await send_request(session, sample)
+        except (
+            ValueError,
+            RuntimeError,
+            OSError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+        ) as exc:
+            # note (wilsonzheng0327): write results.json before aborting.
+            logger.exception(f"Warmup request {sample.sample_id} failed")
+            return RequestResult(request_id=sample.sample_id, error=str(exc))
+
+    # note (wenyao): separate inputs warm the path without caching measured samples.
+    warmup_runner = BenchmarkRunner(
+        RunConfig(
+            max_concurrency=config.max_concurrency,
+            warmup=0,
+            disable_tqdm=config.disable_tqdm,
+        )
+    )
+    warmup_outputs = await warmup_runner.run(warmup_samples, send_warmup)
+    completed_count = sum(warmup_output.is_success for warmup_output in warmup_outputs)
+    warmup_dir = os.path.join(config.output_dir, "warmup")
+    save_json_results(
+        {
+            "config": _build_results_config(config, base_url=base_url),
+            "completed": completed_count,
+            "requested": warmup_count,
+            "wall_clock_s": warmup_runner.wall_clock_s,
+            "results": [asdict(warmup_output) for warmup_output in warmup_outputs],
+        },
+        warmup_dir,
+        "results.json",
+    )
+    if completed_count != warmup_count:
+        raise RuntimeError(
+            f"Benchmark warmup completed {completed_count}/{warmup_count}"
+        )
+
+
 async def run_omni_seedtts_benchmark(
     config: OmniSeedttsBenchmarkConfig,
 ) -> dict:
@@ -387,30 +559,13 @@ async def run_omni_seedtts_benchmark(
     logger.info(f"Prepared {len(samples)} requests")
 
     warmup_count = _resolve_warmup(config)
-    warmup_samples: list[SampleInput]
-    if config.warmup_meta is not None and warmup_count > 0:
-        warmup_samples = load_seedtts_samples(
-            config.warmup_meta, warmup_count, split=config.lang
-        )
-        if len(warmup_samples) != warmup_count:
-            raise ValueError(
-                f"Requested {warmup_count} warmup samples, found {len(warmup_samples)}"
-            )
-    else:
-        warmup_samples = []
+    warmup_samples = load_warmup_samples(config, warmup_count)
 
-    # note (wilsonzheng0327): inline references are encoded once here so file reads and
-    # base64 work stay out of the per-request latency.
+    # note (wilsonzheng0327): encode references once, outside per-request latency.
     if config.voice_clone and config.reference_audio_field == "audio.ref_audio":
         reference_audio_data = preload_reference_audio(samples + warmup_samples)
     else:
         reference_audio_data = {}
-    talker_overrides = {
-        "talker_temperature": config.talker_temperature,
-        "talker_top_p": config.talker_top_p,
-        "talker_top_k": config.talker_top_k,
-        "talker_repetition_penalty": config.talker_repetition_penalty,
-    }
 
     save_audio_dir = os.path.abspath(os.path.join(config.output_dir, "audio"))
     os.makedirs(save_audio_dir, exist_ok=True)
@@ -425,9 +580,7 @@ async def run_omni_seedtts_benchmark(
         max_tokens=config.max_new_tokens,
         temperature=config.temperature,
         seed=config.seed,
-        talker_params={
-            key: value for key, value in talker_overrides.items() if value is not None
-        },
+        talker_params=configured_talker_params(config),
         reference_audio_data=reference_audio_data,
         stream=config.stream,
         system_prompt=config.system_prompt,
@@ -435,49 +588,26 @@ async def run_omni_seedtts_benchmark(
     )
 
     if warmup_samples:
-        warmup_dir = os.path.join(config.output_dir, "warmup")
-        warmup_audio_dir = os.path.abspath(os.path.join(warmup_dir, "audio"))
+        warmup_audio_dir = os.path.abspath(
+            os.path.join(config.output_dir, "warmup", "audio")
+        )
         os.makedirs(warmup_audio_dir, exist_ok=True)
-        warmup_send_fn = build_send_fn(save_audio_dir=warmup_audio_dir)
-
-        async def send_warmup(session, sample):
-            try:
-                return await warmup_send_fn(session, sample)
-            except Exception as exc:
-                logger.exception("Warmup request %s failed", sample.sample_id)
-                return RequestResult(request_id=sample.sample_id, error=str(exc))
-
-        # Note (wenyao): A separate input set lets callers warm the full path
-        # without pre-filling the measured set's caches or changing server startup.
-        warmup_runner = BenchmarkRunner(
-            RunConfig(
-                max_concurrency=config.max_concurrency,
-                warmup=0,
-                disable_tqdm=config.disable_tqdm,
-            )
+        await run_separate_warmup(
+            config,
+            base_url=base_url,
+            warmup_samples=warmup_samples,
+            warmup_count=warmup_count,
+            send_request=build_send_fn(save_audio_dir=warmup_audio_dir),
         )
-        warmup_outputs = await warmup_runner.run(warmup_samples, send_warmup)
-        completed = sum(output.is_success for output in warmup_outputs)
-        save_json_results(
-            {
-                "config": _build_results_config(config, base_url=base_url),
-                "completed": completed,
-                "requested": warmup_count,
-                "wall_clock_s": warmup_runner.wall_clock_s,
-                "results": [asdict(output) for output in warmup_outputs],
-            },
-            warmup_dir,
-            "results.json",
-        )
-        if completed != warmup_count:
-            raise RuntimeError(f"Benchmark warmup completed {completed}/{warmup_count}")
-        warmup_count = 0
+        measured_warmup_count = 0
+    else:
+        measured_warmup_count = warmup_count
 
     runner = BenchmarkRunner(
         RunConfig(
             max_concurrency=config.max_concurrency,
             request_rate=config.request_rate,
-            warmup=warmup_count,
+            warmup=measured_warmup_count,
             disable_tqdm=config.disable_tqdm,
         )
     )
@@ -572,63 +702,87 @@ async def benchmark(config: OmniSeedttsBenchmarkConfig) -> dict:
     return results
 
 
-def aggregate_repeats(concurrency: int, summaries: list[dict]) -> dict:
+def aggregate_metric(
+    summaries: list[RepeatSpeedSummary], metric_name: SweepMetricName
+) -> MetricAggregate:
+    metric_values = [
+        summary[metric_name]
+        for summary in summaries
+        if summary.get(metric_name) is not None
+    ]
+    if not metric_values:
+        return {"mean": None, "min": None, "max": None, "n": 0}
+    return {
+        "mean": statistics.mean(metric_values),
+        "min": min(metric_values),
+        "max": max(metric_values),
+        "n": len(metric_values),
+    }
+
+
+def aggregate_repeats(
+    concurrency: int, summaries: list[RepeatSpeedSummary]
+) -> ConcurrencyAggregate:
     """Aggregate repeat summaries the way the ASR sweeps do, keeping every raw row."""
-    aggregate: dict = {
+    return {
         "concurrency": concurrency,
         "repeats": len(summaries),
         "completed_requests": sum(
             summary["completed_requests"] for summary in summaries
         ),
         "failed_requests": sum(summary["failed_requests"] for summary in summaries),
+        "throughput_qps": aggregate_metric(summaries, "throughput_qps"),
+        "audio_throughput_s_per_s": aggregate_metric(
+            summaries, "audio_throughput_s_per_s"
+        ),
+        "latency_mean_s": aggregate_metric(summaries, "latency_mean_s"),
+        "latency_median_s": aggregate_metric(summaries, "latency_median_s"),
+        "latency_p95_s": aggregate_metric(summaries, "latency_p95_s"),
+        "latency_p99_s": aggregate_metric(summaries, "latency_p99_s"),
+        "rtf_mean": aggregate_metric(summaries, "rtf_mean"),
+        "audio_duration_mean_s": aggregate_metric(summaries, "audio_duration_mean_s"),
+        "per_repeat": summaries,
     }
-    for key in SWEEP_METRICS:
-        values = [summary[key] for summary in summaries if summary.get(key) is not None]
-        if values:
-            aggregate[key] = {
-                "mean": statistics.mean(values),
-                "min": min(values),
-                "max": max(values),
-                "n": len(values),
-            }
-        else:
-            aggregate[key] = {"mean": None, "min": None, "max": None, "n": 0}
-    aggregate["per_repeat"] = summaries
-    return aggregate
 
 
 def run_sweep(
     config: OmniSeedttsBenchmarkConfig, concurrencies: list[int], repeats: int
-) -> dict:
+) -> SweepReport:
     """Run each concurrency level repeats times and write one sweep.json."""
-    results: list[dict] = []
+    if repeats < 1:
+        raise ValueError(f"repeats must be positive, got {repeats}")
+    if not concurrencies:
+        raise ValueError("concurrencies must not be empty")
+    concurrency_aggregates: list[ConcurrencyAggregate] = []
     for concurrency in concurrencies:
-        summaries: list[dict] = []
-        for repeat in range(1, repeats + 1):
-            run_config = replace(
+        repeat_summaries: list[RepeatSpeedSummary] = []
+        for repeat_index in range(1, repeats + 1):
+            repeat_config = replace(
                 config,
                 max_concurrency=concurrency,
-                output_dir=os.path.join(config.output_dir, f"c{concurrency}_r{repeat}"),
+                output_dir=os.path.join(
+                    config.output_dir, f"c{concurrency}_r{repeat_index}"
+                ),
             )
-            run_results = asyncio.run(benchmark(run_config))
-            summaries.append(
+            repeat_benchmark = asyncio.run(benchmark(repeat_config))
+            repeat_summaries.append(
                 {
-                    "repeat": repeat,
-                    "output_dir": run_config.output_dir,
-                    **run_results["summary"],
+                    "repeat": repeat_index,
+                    "output_dir": repeat_config.output_dir,
+                    **repeat_benchmark["summary"],
                 }
             )
-        results.append(aggregate_repeats(concurrency, summaries))
-    sweep = {
+        concurrency_aggregates.append(aggregate_repeats(concurrency, repeat_summaries))
+    sweep_report: SweepReport = {
         "config": {
             **_build_results_config(config, base_url=build_base_url(config)),
             "concurrencies": concurrencies,
             "repeats": repeats,
         },
-        "results": results,
+        "results": concurrency_aggregates,
     }
-    save_json_results(sweep, config.output_dir, "sweep.json")
-    return sweep
+    save_json_results(sweep_report, config.output_dir, "sweep.json")
+    return sweep_report
 
 
 def parse_concurrencies(text: str) -> list[int]:
@@ -912,6 +1066,8 @@ def main() -> None:
             "client": collect_environment_fingerprint(),
             "server": collect_server_identity(base_url),
         }
+    else:
+        config.environment_fingerprint = None
     if is_sweep:
         run_sweep(config, args.concurrencies or [config.max_concurrency], args.repeats)
         return
