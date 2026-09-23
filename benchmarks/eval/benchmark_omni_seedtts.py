@@ -136,7 +136,6 @@ import argparse
 import asyncio
 import logging
 import os
-import statistics
 import time
 from dataclasses import asdict, dataclass, replace
 from functools import partial
@@ -144,6 +143,13 @@ from typing import Literal, Protocol, TypedDict
 
 import aiohttp
 
+from benchmarks.benchmarker.conditions import (
+    MetricAggregate,
+    aggregate_numbers,
+    collect_run_fingerprint,
+    present_floats,
+    warn_if_tail_percentile_is_thin,
+)
 from benchmarks.benchmarker.data import RequestResult
 from benchmarks.benchmarker.runner import (
     BenchmarkRunner,
@@ -157,11 +163,7 @@ from benchmarks.benchmarker.utils import (
     wait_for_service,
 )
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
-from benchmarks.eval.asr_profiling import (
-    BenchmarkFingerprint,
-    collect_environment_fingerprint,
-    collect_server_identity,
-)
+from benchmarks.eval.asr_profiling import BenchmarkFingerprint
 from benchmarks.metrics.performance import (
     build_speed_results,
     compute_speed_metrics,
@@ -182,6 +184,7 @@ from benchmarks.tasks.tts import (
     run_seedtts_utmos,
     save_generated_audio_metadata,
     save_speed_results,
+    talker_sampling_params,
 )
 
 logging.basicConfig(
@@ -192,8 +195,6 @@ logger = logging.getLogger(__name__)
 
 TEXT_PREVIEW_LENGTH = 60
 DEFAULT_TTS_BENCHMARK_CONCURRENCY = int(os.getenv("TTS_BENCHMARK_CONCURRENCY", "16"))
-# note (wilsonzheng0327): below this count p99 interpolates the two slowest requests.
-TAIL_PERCENTILE_MIN_SAMPLES = 100
 SweepMetricName = Literal[
     "throughput_qps",
     "audio_throughput_s_per_s",
@@ -204,13 +205,6 @@ SweepMetricName = Literal[
     "rtf_mean",
     "audio_duration_mean_s",
 ]
-
-
-class MetricAggregate(TypedDict):
-    mean: float | None
-    min: float | None
-    max: float | None
-    n: int
 
 
 class RepeatSpeedSummary(TypedDict, total=False):
@@ -479,16 +473,12 @@ def load_warmup_samples(
 def configured_talker_params(
     config: OmniSeedttsBenchmarkConfig,
 ) -> TalkerSamplingParams:
-    talker_params: TalkerSamplingParams = {}
-    if config.talker_temperature is not None:
-        talker_params["talker_temperature"] = config.talker_temperature
-    if config.talker_top_p is not None:
-        talker_params["talker_top_p"] = config.talker_top_p
-    if config.talker_top_k is not None:
-        talker_params["talker_top_k"] = config.talker_top_k
-    if config.talker_repetition_penalty is not None:
-        talker_params["talker_repetition_penalty"] = config.talker_repetition_penalty
-    return talker_params
+    return talker_sampling_params(
+        talker_temperature=config.talker_temperature,
+        talker_top_p=config.talker_top_p,
+        talker_top_k=config.talker_top_k,
+        talker_repetition_penalty=config.talker_repetition_penalty,
+    )
 
 
 async def run_separate_warmup(
@@ -612,11 +602,7 @@ async def run_omni_seedtts_benchmark(
         )
     )
     outputs = await runner.run(samples, build_send_fn(save_audio_dir=save_audio_dir))
-    if len(samples) < TAIL_PERCENTILE_MIN_SAMPLES:
-        logger.warning(
-            f"latency_p99_s interpolates the two slowest of {len(samples)} requests; "
-            f"use at least {TAIL_PERCENTILE_MIN_SAMPLES} samples before citing tails"
-        )
+    warn_if_tail_percentile_is_thin(len(outputs))
 
     metrics = compute_speed_metrics(outputs, wall_clock_s=runner.wall_clock_s)
     results_config = _build_results_config(config, base_url=base_url)
@@ -705,19 +691,10 @@ async def benchmark(config: OmniSeedttsBenchmarkConfig) -> dict:
 def aggregate_metric(
     summaries: list[RepeatSpeedSummary], metric_name: SweepMetricName
 ) -> MetricAggregate:
-    metric_values = [
-        summary[metric_name]
-        for summary in summaries
-        if summary.get(metric_name) is not None
-    ]
-    if not metric_values:
-        return {"mean": None, "min": None, "max": None, "n": 0}
-    return {
-        "mean": statistics.mean(metric_values),
-        "min": min(metric_values),
-        "max": max(metric_values),
-        "n": len(metric_values),
-    }
+    raw_values: list[object] = []
+    for summary in summaries:
+        raw_values.append(summary.get(metric_name))
+    return aggregate_numbers(present_floats(raw_values))
 
 
 def aggregate_repeats(
@@ -1062,10 +1039,7 @@ def main() -> None:
     base_url = build_base_url(config)
     wait_for_service(base_url, timeout=args.server_timeout)
     if args.fingerprint:
-        config.environment_fingerprint = {
-            "client": collect_environment_fingerprint(),
-            "server": collect_server_identity(base_url),
-        }
+        config.environment_fingerprint = collect_run_fingerprint(base_url)
     else:
         config.environment_fingerprint = None
     if is_sweep:
