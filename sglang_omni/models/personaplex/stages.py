@@ -67,15 +67,6 @@ def caller_audio_source(payload: StagePayload) -> str | bytes:
     return resolve_audio_source(payload)
 
 
-def request_text_prompt(params: dict) -> str | None:
-    for key in ("text_prompt", "instructions"):
-        if key in params:
-            return params[key]
-        else:
-            pass
-    return DEFAULT_TEXT_PROMPT
-
-
 def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
     model_dir = Path(resolve_model_path(model_path))
     tokenizer = load_text_tokenizer(model_dir)
@@ -93,9 +84,10 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
         state = PersonaPlexState.from_dict(payload.data)
         state.num_samples = int(caller.shape[-1])
         state.waveform = pad_to_whole_frames(caller)
-        state.text_prompt_ids = tokenize_text_prompt(
-            tokenizer, request_text_prompt(params)
+        text_prompt = params.get(
+            "text_prompt", params.get("instructions", DEFAULT_TEXT_PROMPT)
         )
+        state.text_prompt_ids = tokenize_text_prompt(tokenizer, text_prompt)
 
         voice = params.get("voice", DEFAULT_VOICE)
         if voice:

@@ -21,19 +21,6 @@ from sglang_omni.utils.audio_payload import audio_waveform_payload
 SOURCE_HINT = "PersonaPlex"
 
 
-def audio_message(request_id: str, waveform: torch.Tensor) -> OutgoingMessage:
-    # Note (wilsonzheng0327): Chunks to the coordinator are msgpack'd, so the waveform
-    # travels as a payload, not a tensor.
-    return OutgoingMessage(
-        request_id=request_id,
-        type="stream",
-        data=audio_waveform_payload(
-            waveform, sample_rate=SAMPLE_RATE, modality="audio", source_hint=SOURCE_HINT
-        ),
-        metadata={"modality": "audio"},
-    )
-
-
 def trim_to_caller(waveform: torch.Tensor, num_samples: int) -> torch.Tensor:
     """Cut the reply back to the caller recording's own length.
 
@@ -90,7 +77,19 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
             pass
         state.emitted += waveform.shape[-1]
         state.audio_parts.append(waveform)
-        return [audio_message(request_id, waveform)]
+        return [
+            OutgoingMessage(
+                request_id=request_id,
+                type="stream",
+                data=audio_waveform_payload(
+                    waveform,
+                    sample_rate=SAMPLE_RATE,
+                    modality="audio",
+                    source_hint=SOURCE_HINT,
+                ),
+                metadata={"modality": "audio"},
+            )
+        ]
 
     def on_stream_done(self, request_id: str) -> list[OutgoingMessage]:
         state = self.stream_states.get(request_id)
