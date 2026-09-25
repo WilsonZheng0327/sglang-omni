@@ -12,7 +12,6 @@ import itertools
 import json
 import os
 import shlex
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +20,25 @@ import pytest
 import soundfile
 import torch
 
-from sglang_omni.models.personaplex.architecture import SAMPLE_RATE, SAMPLES_PER_FRAME
+from sglang_omni.models.personaplex.architecture import (
+    MIMI_WEIGHTS_GLOB,
+    MOSHI_WEIGHTS_NAME,
+    SAMPLE_RATE,
+    SAMPLES_PER_FRAME,
+)
+from sglang_omni.models.personaplex.prompts import (
+    DEFAULT_TEXT_PROMPT,
+    TEXT_TOKENIZER_NAME,
+    resolve_voice_path,
+)
+from tests.test_model.personaplex_repro import (
+    ReferenceInputs,
+    checkpoint_digests,
+    ensure_reference_run,
+    file_digest,
+    pinned_checkpoint,
+    reference_checkout,
+)
 
 pytestmark = pytest.mark.accelerator
 
@@ -91,12 +108,18 @@ def reference_text(pieces: list[str], frames: int | None = None) -> str:
 
 
 def compare_frames(port: np.ndarray, reference: np.ndarray, atol: float) -> FrameParity:
-    frames = min(port.shape[0], reference.shape[0]) // SAMPLES_PER_FRAME
-    samples = frames * SAMPLES_PER_FRAME
-    per_frame = np.abs(
-        port[:samples].reshape(frames, SAMPLES_PER_FRAME)
-        - reference[:samples].reshape(frames, SAMPLES_PER_FRAME)
-    ).max(axis=1)
+    if port.shape != reference.shape:
+        raise ValueError(
+            f"Audio sample counts differ: {port.shape} versus {reference.shape}"
+        )
+    if not port.size:
+        raise ValueError("Cannot compare empty audio")
+    if not np.isfinite(port).all() or not np.isfinite(reference).all():
+        raise ValueError("Audio contains non-finite samples")
+    per_frame = np.maximum.reduceat(
+        np.abs(port - reference), np.arange(0, port.size, SAMPLES_PER_FRAME)
+    )
+    frames = len(per_frame)
     identical = per_frame <= atol
     first_divergence = frames if identical.all() else int(np.argmin(identical))
     return FrameParity(
@@ -116,79 +139,93 @@ def text_prompt_for(case: ParityCase, assets: Path) -> str | None:
     )
 
 
-def run_reference(case: ParityCase, assets: Path, out_dir: Path, python: str) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    command = [
-        python,
-        "-m",
-        "moshi.offline",
-        "--hf-repo",
-        os.environ.get("PERSONAPLEX_REFERENCE_REPO", DEFAULT_CHECKPOINT),
-        "--voice-prompt",
-        f"{case.voice}.pt",
-        "--input-wav",
-        str(assets / case.input_wav),
-        "--greedy",
-        "--seed",
-        str(REFERENCE_SEED),
-        "--output-wav",
-        str(out_dir / "output.wav"),
-        "--output-text",
-        str(out_dir / "output.json"),
-    ]
-    text_prompt = text_prompt_for(case, assets)
-    if text_prompt is not None:
-        command += ["--text-prompt", text_prompt]
-    with open(out_dir / "reference.log", "w") as log:
-        subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
+@pytest.fixture(scope="module")
+def assets_dir() -> Path:
+    return reference_checkout() / "assets" / "test"
 
 
 @pytest.fixture(scope="module")
-def assets_dir() -> Path:
-    source = os.environ.get("PERSONAPLEX_REFERENCE_SOURCE")
-    if not source:
-        pytest.skip(
-            "Set PERSONAPLEX_REFERENCE_SOURCE to the reference checkout for its test recordings"
-        )
-    return Path(source).expanduser() / "assets" / "test"
+def checkpoint(assets_dir: Path) -> Path:
+    return pinned_checkpoint("PERSONAPLEX_PARITY_CHECKPOINT")
 
 
 @pytest.fixture(scope="module")
 def reference_outputs(
-    assets_dir: Path, tmp_path_factory: pytest.TempPathFactory
+    assets_dir: Path, checkpoint: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> dict[str, tuple[np.ndarray, list[str]]]:
-    """Greedy reference audio and per-frame text pieces per case.
-
-    Runs before the port's pipeline starts so the two never share the GPU.
-    """
+    """Validate or generate reference outputs before the port starts on the GPU."""
     python = os.environ.get("PERSONAPLEX_REFERENCE_PYTHON")
     configured = os.environ.get("PERSONAPLEX_REFERENCE_DIR")
-    if configured:
-        root = Path(configured).expanduser()
-    elif python:
-        root = tmp_path_factory.mktemp("personaplex-reference")
-    else:
-        pytest.skip(
-            "Set PERSONAPLEX_REFERENCE_PYTHON (an interpreter with moshi-personaplex) "
-            "or PERSONAPLEX_REFERENCE_DIR (cached reference outputs)"
+    root = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else tmp_path_factory.mktemp("personaplex-reference")
+    )
+    source = assets_dir.parents[1]
+    weights = checkpoint_digests(checkpoint)
+    (mimi_weight,) = checkpoint.glob(MIMI_WEIGHTS_GLOB)
+    outputs = {}
+    for name, case in CASES.items():
+        output = root / name
+        voice = resolve_voice_path(checkpoint, case.voice).resolve()
+        prompt = text_prompt_for(case, assets_dir) or DEFAULT_TEXT_PROMPT
+        inputs = ReferenceInputs(
+            revision=os.environ["PERSONAPLEX_REFERENCE_REVISION"],
+            checkpoint=weights,
+            files={
+                "input_wav": file_digest(assets_dir / case.input_wav),
+                "voice": file_digest(voice),
+            },
+            settings={"text_prompt": prompt, "greedy": 1, "seed": REFERENCE_SEED},
         )
-    # output.json is the last file the reference writes, so it marks a finished run.
-    missing = [name for name in CASES if not (root / name / "output.json").exists()]
-    if missing and not python:
-        pytest.skip(f"No cached reference output for {missing} under {root}")
-    for name in missing:
-        run_reference(CASES[name], assets_dir, root / name, python)
-    return {
-        name: (
-            read_wav(root / name / "output.wav"),
-            json.loads((root / name / "output.json").read_text()),
+        command = (
+            [
+                python,
+                "-m",
+                "moshi.offline",
+                "--hf-repo",
+                os.environ.get("PERSONAPLEX_REFERENCE_REPO", DEFAULT_CHECKPOINT),
+                "--moshi-weight",
+                str(checkpoint / MOSHI_WEIGHTS_NAME),
+                "--mimi-weight",
+                str(mimi_weight),
+                "--tokenizer",
+                str(checkpoint / TEXT_TOKENIZER_NAME),
+                "--voice-prompt-dir",
+                str(voice.parent),
+                "--voice-prompt",
+                voice.name,
+                "--text-prompt",
+                prompt,
+                "--input-wav",
+                str(assets_dir / case.input_wav),
+                "--greedy",
+                "--seed",
+                str(REFERENCE_SEED),
+                "--output-wav",
+                str(output / "output.wav"),
+                "--output-text",
+                str(output / "output.json"),
+            ]
+            if python
+            else None
         )
-        for name in CASES
-    }
+        ensure_reference_run(
+            command=command,
+            source=source,
+            inputs=inputs,
+            manifest=output / "manifest.json",
+            artifacts=(output / "output.wav", output / "output.json"),
+        )
+        outputs[name] = (
+            read_wav(output / "output.wav"),
+            json.loads((output / "output.json").read_text()),
+        )
+    return outputs
 
 
 @pytest.fixture(scope="module")
-def generate(reference_outputs):
+def generate(reference_outputs, checkpoint: Path):
     if not torch.cuda.is_available():
         pytest.skip("PersonaPlex parity requires CUDA")
     from sglang_omni.client import Client, GenerateRequest, SamplingParams
@@ -197,9 +234,7 @@ def generate(reference_outputs):
     from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
     from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY
 
-    config = PersonaPlexPipelineConfig(
-        model_path=os.environ.get("PERSONAPLEX_PARITY_CHECKPOINT", DEFAULT_CHECKPOINT)
-    )
+    config = PersonaPlexPipelineConfig(model_path=str(checkpoint))
     overrides = shlex.split(os.environ.get("PERSONAPLEX_PARITY_STAGE_ARGS", ""))
     if overrides:
         manager = ConfigManager(config)
@@ -273,12 +308,21 @@ def port_greedy(generate, assets_dir: Path) -> dict[str, Reply]:
 
 
 @pytest.mark.parametrize("name", list(CASES))
-def test_greedy_matches_reference(name, port_greedy, reference_outputs):
+def test_greedy_matches_reference(
+    name, port_greedy, reference_outputs, assets_dir: Path
+):
     case = CASES[name]
     reply = port_greedy[name]
     ref_audio, ref_pieces = reference_outputs[name]
     atol = float(os.environ.get("PERSONAPLEX_PARITY_ATOL", DEFAULT_ATOL))
 
+    expected_samples = read_wav(assets_dir / case.input_wav).size
+    assert reply.audio.size == ref_audio.size == expected_samples, (
+        f"{name}: expected {expected_samples} samples, got "
+        f"port={reply.audio.size}, reference={ref_audio.size}"
+    )
+    expected_frames = (expected_samples + SAMPLES_PER_FRAME - 1) // SAMPLES_PER_FRAME
+    assert len(ref_pieces) == expected_frames
     parity = compare_frames(reply.audio, ref_audio, atol)
     ref_text_prefix = reference_text(ref_pieces, parity.identical_frames)
     port_text = normalize_text(reply.text)
@@ -302,7 +346,11 @@ def test_greedy_matches_reference(name, port_greedy, reference_outputs):
         f"{name}: only {parity.identical_frames} leading frames identical, "
         f"expected at least {case.min_identical_frames}"
     )
-    assert port_text.startswith(ref_text_prefix), (
+    assert (
+        port_text.startswith(ref_text_prefix)
+        if diverged
+        else port_text == ref_text_prefix
+    ), (
         f"{name}: text differs before the audio divergence at frame "
         f"{parity.identical_frames}"
     )

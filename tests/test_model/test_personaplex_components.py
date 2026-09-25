@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 import os
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,11 +37,17 @@ from sglang_omni.models.personaplex.components.mimi import (
     resolve_mimi_weights,
 )
 from sglang_omni.models.personaplex.sglang_model import PersonaPlexForCausalLM
-from sglang_omni.utils.checkpoint import resolve_checkpoint
+from tests.test_model.personaplex_repro import (
+    ReferenceInputs,
+    checkpoint_digests,
+    ensure_reference_run,
+    file_digest,
+    pinned_checkpoint,
+    reference_checkout,
+)
 
 pytestmark = pytest.mark.accelerator
 
-DEFAULT_MOSHI_BASE = "kyutai/moshiko-pytorch-bf16"
 DUMP_SCRIPT = Path(__file__).with_name("personaplex_reference_dump.py")
 MIMI_ATOL = 1e-5  # float32 codec through two cuDNN builds, TF32 off on both
 # The reference tensors come from its streaming path, the one it serves with; its
@@ -86,47 +91,61 @@ def exact_float32():
 
 
 @pytest.fixture(scope="module")
-def checkpoint() -> Path:
-    if not torch.cuda.is_available():
-        pytest.skip("PersonaPlex component parity requires CUDA")
-    return Path(
-        resolve_checkpoint(os.environ.get("PERSONAPLEX_MOSHI_BASE", DEFAULT_MOSHI_BASE))
-    )
+def source() -> Path:
+    return reference_checkout()
 
 
 @pytest.fixture(scope="module")
-def reference(checkpoint: Path) -> dict[str, torch.Tensor]:
-    """The reference dump, produced first so the two never share the GPU."""
+def checkpoint(source: Path) -> Path:
+    if not torch.cuda.is_available():
+        pytest.skip("PersonaPlex component parity requires CUDA")
+    return pinned_checkpoint("PERSONAPLEX_MOSHI_BASE")
+
+
+@pytest.fixture(scope="module")
+def reference(checkpoint: Path, source: Path) -> dict[str, torch.Tensor]:
+    """Validate or produce the reference dump before allocating port tensors."""
     dump = os.environ.get("PERSONAPLEX_REFERENCE_DUMP")
     if not dump:
-        pytest.skip(
-            "Set PERSONAPLEX_REFERENCE_DUMP to the reference tensors file "
-            "(made by personaplex_reference_dump.py)"
-        )
-    path = Path(dump).expanduser()
-    if not path.exists():
-        python = os.environ.get("PERSONAPLEX_REFERENCE_PYTHON")
-        source = os.environ.get("PERSONAPLEX_REFERENCE_SOURCE")
-        if not (python and source):
-            pytest.skip(
-                f"{path} is missing; set PERSONAPLEX_REFERENCE_PYTHON and "
-                "PERSONAPLEX_REFERENCE_SOURCE to create it"
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        clip = Path(source).expanduser() / "assets" / "test" / "input_assistant.wav"
-        subprocess.run(
-            [
-                python,
-                str(DUMP_SCRIPT),
-                "--checkpoint",
-                str(checkpoint),
-                "--clip",
-                str(clip),
-                "--out",
-                str(path),
-            ],
-            check=True,
-        )
+        pytest.skip("Set PERSONAPLEX_REFERENCE_DUMP to the reference tensors file")
+    path = Path(dump).expanduser().resolve()
+    python = os.environ.get("PERSONAPLEX_REFERENCE_PYTHON")
+    clip = source / "assets" / "test" / "input_assistant.wav"
+    inputs = ReferenceInputs(
+        revision=os.environ["PERSONAPLEX_REFERENCE_REVISION"],
+        checkpoint=checkpoint_digests(checkpoint),
+        files={"clip": file_digest(clip), "dump_script": file_digest(DUMP_SCRIPT)},
+        settings={"frames": 200, "batch": 2, "seed": 0, "device": "cuda"},
+    )
+    command = (
+        [
+            python,
+            str(DUMP_SCRIPT.resolve()),
+            "--checkpoint",
+            str(checkpoint),
+            "--clip",
+            str(clip),
+            "--out",
+            str(path),
+            "--frames",
+            "200",
+            "--batch",
+            "2",
+            "--seed",
+            "0",
+            "--device",
+            "cuda",
+        ]
+        if python
+        else None
+    )
+    ensure_reference_run(
+        command=command,
+        source=source,
+        inputs=inputs,
+        manifest=path.with_suffix(".manifest.json"),
+        artifacts=(path,),
+    )
     return {name: value.cuda() for name, value in load_file(str(path)).items()}
 
 
