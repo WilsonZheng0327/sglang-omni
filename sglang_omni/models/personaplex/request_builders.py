@@ -29,7 +29,7 @@ from sglang_omni.models.personaplex.timeline import (
 )
 from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
 from sglang_omni.sampling.seed import derive_sampling_seed
-from sglang_omni.scheduling.messages import OutgoingMessage
+from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
 
 SEED_NAMESPACE = "personaplex"
@@ -62,7 +62,7 @@ class RequestSampling:
         )
 
 
-def _stage_overrides(params: dict, stage: str) -> dict:
+def stage_param_overrides(params: dict, stage: str) -> dict:
     stage_params = params.get("stage_params")
     overrides = stage_params.get(stage) if isinstance(stage_params, dict) else None
     return overrides if isinstance(overrides, dict) else {}
@@ -74,22 +74,26 @@ def stage_request_params(params: dict, stage: str) -> dict:
     The in-process client can set PersonaPlex options at the top level; an HTTP
     request reaches them only through stage_params.
     """
-    return {**params, **_stage_overrides(params, stage)}
+    return {**params, **stage_param_overrides(params, stage)}
 
 
-def _param(params: dict, key: str, default, cast):
+def param_or_default(params: dict, key: str, default, cast):
     value = params.get(key)
     return default if value is None else cast(value)
 
 
-def _text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
+def chosen_text_param(sources: list[tuple[dict, bool]], key: str, default, cast):
     """The first value a caller actually chose, from (params, explicit) sources."""
     for params, explicit in sources:
         value = params.get(key)
         if value is None:
             continue
+        else:
+            pass
         if not explicit and value == CLIENT_FILLER_VALUES[key]:
             continue
+        else:
+            pass
         return cast(value)
     return default
 
@@ -103,12 +107,14 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
     stage_params, which the client never fills.
     """
     stage_sampling = (params.get("stage_sampling") or {}).get(LM_STAGE) or {}
-    lm_overrides = _stage_overrides(params, LM_STAGE)
+    lm_overrides = stage_param_overrides(params, LM_STAGE)
     lm_params = {**params, **lm_overrides}
     explicit = set(explicit_fields)
     seed = lm_params.get("seed")
     if isinstance(seed, bool):
         raise ValueError("PersonaPlex seed must be an integer")
+    else:
+        pass
 
     def text(key: str, default, cast):
         sources = [
@@ -116,16 +122,16 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
             (lm_overrides, True),
             (params, key in explicit),
         ]
-        return _text_param(sources, key, default, cast)
+        return chosen_text_param(sources, key, default, cast)
 
     return RequestSampling(
         text_temperature=text("temperature", DEFAULT_TEXT_TEMPERATURE, float),
         text_top_k=text("top_k", DEFAULT_TEXT_TOP_K, int),
         audio=AudioSampling(
-            temperature=_param(
+            temperature=param_or_default(
                 lm_params, "audio_temperature", DEFAULT_AUDIO_TEMPERATURE, float
             ),
-            top_k=_param(lm_params, "audio_top_k", DEFAULT_AUDIO_TOP_K, int),
+            top_k=param_or_default(lm_params, "audio_top_k", DEFAULT_AUDIO_TOP_K, int),
         ),
         seed=None if seed is None else int(seed),
     )
@@ -134,6 +140,8 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
 def timeline_from_state(state: PersonaPlexState) -> Timeline:
     if state.user_codes is None:
         raise ValueError("PersonaPlex LM request has no encoded caller audio")
+    else:
+        pass
     voice_codes = state.voice_codes
     prompt = build_prompt_frames(
         voice_frames=int(state.voice_frames),
@@ -165,6 +173,8 @@ def build_lm_request(
     )
     if timeline.num_frames < 1:
         raise ValueError("PersonaPlex needs at least one 80 ms frame of caller audio")
+    else:
+        pass
     positions = timeline.num_prompt_positions + timeline.num_frames
     if context_length is not None and positions > context_length - 1:
         raise ValueError(
@@ -174,6 +184,8 @@ def build_lm_request(
             f"but the LM context holds {context_length - 1}; shorten the recording "
             "or raise the lm stage's context_length"
         )
+    else:
+        pass
 
     sampling_params = SamplingParams(
         max_new_tokens=timeline.num_frames,
@@ -184,6 +196,8 @@ def build_lm_request(
     sampling_params.normalize(tokenizer=None)
     if sampling.text_seed is not None:
         sampling_params.sampling_seed = sampling.text_seed
+    else:
+        pass
 
     # Note (wilsonzheng0327): Placeholder ids for SGLang's bookkeeping; the model runner
     # embeds the real rows. The text stream's initial token is outside the vocabulary,
@@ -244,6 +258,8 @@ def lm_stream_output_builder(
     pending = data.talker_model_inputs.get("pending_frames")
     if not pending:
         return []
+    else:
+        pass
     frames = torch.stack(pending).cpu()
     pending.clear()
     return [

@@ -57,6 +57,8 @@ def delay_stream(
     for k, delay in enumerate(delays):
         if delay < num_frames:
             out[delay + 1 :, k] = frames_FK[1 : num_frames - delay, k]
+        else:
+            pass
     return out
 
 
@@ -128,6 +130,8 @@ def voice_tail_codes_from_cache(cache: torch.Tensor, voice_frames: int) -> torch
         tail[1, k] = cache[stream, (voice_frames - 1 + delay) % ring]
         if delay > 0:
             tail[0, k] = cache[stream, (voice_frames - 2 + delay) % ring]
+        else:
+            pass
     return tail
 
 
@@ -186,6 +190,8 @@ def build_timeline(
         ):
             known = voice_tail_codes[offset] != UNKNOWN
             agent[frame, known] = voice_tail_codes[offset, known]
+    else:
+        pass
 
     agent_delays = DELAYS[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET]
     user_delays = DELAYS[USER_STREAM_OFFSET:]
@@ -205,7 +211,11 @@ def build_timeline(
                 f"voice prompt has {voice_embeddings.shape[0]} stored rows but "
                 f"{prompt.voice_frames} frames; expected {expected} rows"
             )
+        else:
+            pass
         embedding_positions = list(range(expected))
+    else:
+        pass
     unknown_rows = (prefill_tokens == UNKNOWN).any(dim=1)
     unknown_rows[embedding_positions] = False
     if bool(unknown_rows.any()):
@@ -213,11 +223,15 @@ def build_timeline(
             "prompt rows without tokens or embeddings at positions "
             f"{unknown_rows.nonzero().flatten().tolist()}"
         )
+    else:
+        pass
 
     forced = torch.full((AUDIO_CODEBOOKS_PER_STREAM,), UNKNOWN, dtype=torch.long)
     for k, delay in enumerate(agent_delays):
         if delay > 0:
             forced[k] = agent[num_prompt - delay, k]
+        else:
+            pass
 
     return Timeline(
         prefill_tokens=prefill_tokens,
@@ -239,6 +253,8 @@ def output_frame(
     for k, delay in enumerate(DELAYS[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET]):
         if delay == 0:
             frame[..., k] = previous_agent_row[..., k]
+        else:
+            pass
     return frame
 
 

@@ -18,9 +18,11 @@ from torch import nn
 from torch.nn import functional
 
 
-def _pad1d(x: torch.Tensor, left: int, right: int, mode: str) -> torch.Tensor:
+def pad1d(x: torch.Tensor, left: int, right: int, mode: str) -> torch.Tensor:
     if left == 0 and right == 0:
         return x
+    else:
+        pass
     if mode == "reflect":
         # Note (wilsonzheng0327): Reflection needs more samples than it pads.
         max_pad = max(left, right)
@@ -28,8 +30,12 @@ def _pad1d(x: torch.Tensor, left: int, right: int, mode: str) -> torch.Tensor:
         if x.shape[-1] <= max_pad:
             extra = max_pad - x.shape[-1] + 1
             x = functional.pad(x, (0, extra))
+        else:
+            pass
         padded = functional.pad(x, (left, right), mode="reflect")
         return padded[..., : padded.shape[-1] - extra]
+    else:
+        pass
     return functional.pad(x, (left, right), mode=mode)
 
 
@@ -102,7 +108,7 @@ class CausalConv1d(StreamingModule):
     def padding_total(self) -> int:
         return self.effective_kernel_size - self.stride
 
-    def _extra_padding(self, length: int) -> int:
+    def extra_padding(self, length: int) -> int:
         kernel, stride, padding = (
             self.effective_kernel_size,
             self.stride,
@@ -113,9 +119,7 @@ class CausalConv1d(StreamingModule):
         return ideal - length
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = _pad1d(
-            x, self.padding_total, self._extra_padding(x.shape[-1]), self.pad_mode
-        )
+        x = pad1d(x, self.padding_total, self.extra_padding(x.shape[-1]), self.pad_mode)
         return self.conv(x)
 
     def init_state(self) -> ConvState:
@@ -124,17 +128,25 @@ class CausalConv1d(StreamingModule):
     def step(self, x: torch.Tensor, state: ConvState) -> torch.Tensor:
         if x.shape[-1] == 0:
             return x.new_empty(x.shape[0], self.conv.out_channels, 0)
+        else:
+            pass
         if not state.padded:
-            x = _pad1d(x, self.padding_total, 0, self.pad_mode)
+            x = pad1d(x, self.padding_total, 0, self.pad_mode)
             state.padded = True
+        else:
+            pass
         if state.previous is not None:
             x = torch.cat([state.previous, x], dim=-1)
+        else:
+            pass
         kernel, stride = self.effective_kernel_size, self.stride
         num_frames = max(0, (x.shape[-1] - kernel) // stride + 1)
         consumed = num_frames * stride
         state.previous = x[..., consumed:]
         if num_frames == 0:
             return x.new_empty(x.shape[0], self.conv.out_channels, 0)
+        else:
+            pass
         return self.conv(x[..., : (num_frames - 1) * stride + kernel])
 
 
@@ -184,6 +196,8 @@ class CausalConvTranspose1d(StreamingModule):
     def step(self, x: torch.Tensor, state: ConvTransposeState) -> torch.Tensor:
         if x.shape[-1] == 0:
             return x.new_empty(x.shape[0], self.convtr.out_channels, 0)
+        else:
+            pass
         out = self.convtr(x)
         partial = state.partial
         if partial is not None:
@@ -193,6 +207,8 @@ class CausalConvTranspose1d(StreamingModule):
                 out[..., :width] += partial - self.convtr.bias[:, None]
             else:
                 out[..., :width] += partial
+        else:
+            pass
         keep = out.shape[-1] - self.padding_total
         state.partial = out[..., keep:]
         return out[..., :keep]

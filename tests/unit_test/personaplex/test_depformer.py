@@ -12,7 +12,7 @@ SPEC = DepformerSpec(
 )
 
 
-def _reference_weights(checkpoint_steps: int) -> dict[str, torch.Tensor]:
+def reference_weights(checkpoint_steps: int) -> dict[str, torch.Tensor]:
     torch.manual_seed(0)
     dim, ffn = SPEC.dim, SPEC.ffn_hidden
     weights = {"depformer_text_emb.weight": torch.randn(32001, dim)}
@@ -39,7 +39,7 @@ def _reference_weights(checkpoint_steps: int) -> dict[str, torch.Tensor]:
     return weights
 
 
-def _first_steps(
+def first_steps(
     weights: dict[str, torch.Tensor], steps: int
 ) -> dict[str, torch.Tensor]:
     """The 8-step checkpoint a 16-step one embeds: per-step blocks sliced, the rest shared."""
@@ -68,11 +68,11 @@ def _first_steps(
 
 
 def test_sixteen_step_checkpoint_loads_its_first_eight_steps():
-    weights = _reference_weights(16)
+    weights = reference_weights(16)
     sixteen = Depformer(SPEC)
     sixteen.load_reference_weights(weights)
     eight = Depformer(SPEC)
-    eight.load_reference_weights(_first_steps(weights, 8))
+    eight.load_reference_weights(first_steps(weights, 8))
     for name, value in eight.state_dict().items():
         torch.testing.assert_close(sixteen.state_dict()[name], value, atol=0, rtol=0)
     layer = sixteen.layers[0]
@@ -94,7 +94,7 @@ def test_sixteen_step_checkpoint_loads_its_first_eight_steps():
 
 def test_forced_codes_are_kept_and_condition_later_steps():
     model = Depformer(SPEC)
-    model.load_reference_weights(_reference_weights(8))
+    model.load_reference_weights(reference_weights(8))
     greedy = lambda logits: sample_token(logits, AudioSampling(0.0, 0))
     text = torch.tensor([3, 3])
     hidden = torch.randn(2, SPEC.input_dim)

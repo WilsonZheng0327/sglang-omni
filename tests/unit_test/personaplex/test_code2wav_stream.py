@@ -16,14 +16,14 @@ from sglang_omni.proto import StagePayload
 from sglang_omni.proto.request import OmniRequest
 
 
-def _waveform(payload: dict) -> torch.Tensor:
+def decode_waveform(payload: dict) -> torch.Tensor:
     assert payload["sample_rate"] == SAMPLE_RATE
     return torch.from_numpy(
         np.frombuffer(payload["audio_waveform"], dtype=np.float32).copy()
     )
 
 
-def _start(scheduler, request_id: str) -> StagePayload:
+def start_stream(scheduler, request_id: str) -> StagePayload:
     payload = StagePayload(
         request_id, request=OmniRequest(inputs={}), data=PersonaPlexState().to_dict()
     )
@@ -40,7 +40,7 @@ def test_interleaved_requests_stream_their_own_waveforms(random_codec):
         "b": torch.randint(0, 2048, (4, 8), generator=torch.Generator().manual_seed(2)),
     }
     whole = {rid: codec.decode(c.T[None])[0, 0] for rid, c in codes.items()}
-    payloads = {rid: _start(scheduler, rid) for rid in codes}
+    payloads = {rid: start_stream(scheduler, rid) for rid in codes}
 
     streamed = {rid: [] for rid in codes}
 
@@ -49,7 +49,7 @@ def test_interleaved_requests_stream_their_own_waveforms(random_codec):
             rid, SimpleNamespace(data=chunk, metadata=None)
         )
         assert message.type == "stream"
-        streamed[rid].append(_waveform(message.data))
+        streamed[rid].append(decode_waveform(message.data))
 
     for frame in range(4):
         push("a", codes["a"][frame : frame + 1])
@@ -64,7 +64,7 @@ def test_interleaved_requests_stream_their_own_waveforms(random_codec):
         assert result.type == "result"
         assert result.data.request is payloads[rid].request
         torch.testing.assert_close(
-            _waveform(result.data.data), whole[rid], atol=1e-5, rtol=1e-5
+            decode_waveform(result.data.data), whole[rid], atol=1e-5, rtol=1e-5
         )
 
 
@@ -88,7 +88,7 @@ def test_abort_clears_stream_state(random_codec):
     scheduler = PersonaPlexCode2WavScheduler(
         random_codec, compute_fn=lambda payload: payload
     )
-    _start(scheduler, "a")
+    start_stream(scheduler, "a")
     assert scheduler.on_stream_done("a") != []
     scheduler.clear_stream_state("a")
     assert scheduler.on_stream_done("a") == []
@@ -114,7 +114,7 @@ def test_reply_is_cut_back_to_the_caller_recording_length(random_codec):
                 data=codes[frame : frame + 1], metadata={"num_samples": num_samples}
             ),
         )
-        streamed.append(_waveform(message.data))
+        streamed.append(decode_waveform(message.data))
     torch.testing.assert_close(
         torch.cat(streamed), whole[:num_samples], atol=1e-5, rtol=1e-5
     )
@@ -122,9 +122,9 @@ def test_reply_is_cut_back_to_the_caller_recording_length(random_codec):
 
     # Note (wilsonzheng0327): The terminal payload lands after every chunk, as it does
     # when the LM stage finishes.
-    _start(scheduler, "a")
+    start_stream(scheduler, "a")
     (result,) = scheduler.on_stream_done("a")
-    reply = _waveform(result.data.data)
+    reply = decode_waveform(result.data.data)
     torch.testing.assert_close(reply, whole[:num_samples], atol=1e-5, rtol=1e-5)
 
 

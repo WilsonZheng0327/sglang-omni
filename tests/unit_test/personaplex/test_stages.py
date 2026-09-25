@@ -21,7 +21,7 @@ from sglang_omni.serve.openai_errors import is_bad_request_error
 CALLER_SAMPLES = 2000
 
 
-class _Tokenizer:
+class FakeTokenizer:
     def encode(self, text):
         return [len(word) for word in text.split()]
 
@@ -41,7 +41,7 @@ def preprocess(monkeypatch, tmp_path):
     caller = np.stack(
         [np.full(CALLER_SAMPLES, 0.5), np.full(CALLER_SAMPLES, -1.0)]
     ).astype(np.float32)
-    monkeypatch.setattr(stages, "load_text_tokenizer", lambda _: _Tokenizer())
+    monkeypatch.setattr(stages, "load_text_tokenizer", lambda _: FakeTokenizer())
     sources = []
 
     def load_audio(source, **_):
@@ -61,7 +61,7 @@ def preprocess(monkeypatch, tmp_path):
             ),
             data={},
         )
-        return PersonaPlexState.from_dict(scheduler._fn(payload).data)
+        return PersonaPlexState.from_dict(scheduler.fn(payload).data)
 
     run.loads = loads
     run.sources = sources
@@ -79,7 +79,7 @@ def test_caller_is_channel_zero_padded_to_whole_frames(preprocess):
 
 
 def test_role_prompt_default_alias_and_empty(preprocess):
-    tokenizer = _Tokenizer()
+    tokenizer = FakeTokenizer()
     assert preprocess().text_prompt_ids == tokenize_text_prompt(
         tokenizer, DEFAULT_TEXT_PROMPT
     )
@@ -151,7 +151,7 @@ def test_whole_reply_decode_is_cut_back_to_the_caller_length(monkeypatch):
                 1, 1, -1
             )
 
-    monkeypatch.setattr(stages, "_codec", lambda *a, **k: (_Codec(), "cpu"))
+    monkeypatch.setattr(stages, "load_codec", lambda *a, **k: (_Codec(), "cpu"))
     scheduler = stages.create_code2wav_executor("m")
     state = PersonaPlexState(
         num_samples=num_samples, codes=torch.zeros(frames, 8, dtype=torch.long)
@@ -173,14 +173,14 @@ def test_mimi_encode_fills_caller_and_voice_codes(monkeypatch):
             first = int(waveform_B1T[0, 0, 0])
             return torch.full((1, 8, frames), first, dtype=torch.long)
 
-    monkeypatch.setattr(stages, "_codec", lambda *a, **k: (_Codec(), "cpu"))
+    monkeypatch.setattr(stages, "load_codec", lambda *a, **k: (_Codec(), "cpu"))
     scheduler = stages.create_mimi_encode_executor("m")
 
     def run(state):
         payload = StagePayload(
             "r", request=OmniRequest(inputs={}, params={}), data=state.to_dict()
         )
-        return PersonaPlexState.from_dict(scheduler._fn(payload).data)
+        return PersonaPlexState.from_dict(scheduler.fn(payload).data)
 
     state = run(
         PersonaPlexState(

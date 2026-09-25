@@ -100,7 +100,7 @@ def test_checkpoint_names_map_onto_the_module_tree():
 SMALL = replace(MIMI, context=6, num_layers=2, dim=16, num_heads=2, ffn_dim=8)
 
 
-def _small_transformer() -> MimiTransformer:
+def small_transformer() -> MimiTransformer:
     torch.manual_seed(4)
     transformer = MimiTransformer(SMALL).eval()
     with torch.no_grad():
@@ -109,7 +109,7 @@ def _small_transformer() -> MimiTransformer:
     return transformer
 
 
-def _influenced_steps(chunk: int) -> list[int]:
+def influenced_steps(chunk: int) -> list[int]:
     """Which steps still depend on step 0, feeding chunk steps at a time."""
     torch.manual_seed(0)
     attention = MimiAttention(
@@ -138,8 +138,8 @@ def _influenced_steps(chunk: int) -> list[int]:
 def test_the_ring_drops_its_oldest_step_as_the_reference_does():
     """The reference labels the slot it is about to overwrite as a future position,
     so once the ring is full its oldest entry leaves the window."""
-    assert _influenced_steps(1) == list(range(SMALL.context - 1))
-    assert _influenced_steps(SMALL.frame_ratio) == list(
+    assert influenced_steps(1) == list(range(SMALL.context - 1))
+    assert influenced_steps(SMALL.frame_ratio) == list(
         range(SMALL.context - SMALL.frame_ratio)
     )
 
@@ -148,7 +148,7 @@ def test_the_ring_drops_its_oldest_step_as_the_reference_does():
     "length", [SMALL.context - 1, SMALL.context, 3 * SMALL.context + 1]
 )
 def test_whole_sequence_matches_the_streaming_replay(length):
-    transformer = _small_transformer()
+    transformer = small_transformer()
     x = torch.randn(1, SMALL.dim, length)
     state = transformer.init_state()
     with torch.no_grad():

@@ -47,6 +47,8 @@ def load_text_tokenizer(model_dir: str | Path) -> SentencePieceProcessor:
     path = Path(model_dir) / TEXT_TOKENIZER_NAME
     if not path.is_file():
         raise FileNotFoundError(f"PersonaPlex text tokenizer missing: {path}")
+    else:
+        pass
     return SentencePieceProcessor(model_file=str(path))
 
 
@@ -54,6 +56,8 @@ def wrap_system_tags(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith(SYSTEM_TAG) and cleaned.endswith(SYSTEM_TAG):
         return cleaned
+    else:
+        pass
     return f"{SYSTEM_TAG} {cleaned} {SYSTEM_TAG}"
 
 
@@ -62,6 +66,8 @@ def tokenize_text_prompt(
 ) -> list[int]:
     if not text or not text.strip():
         return []
+    else:
+        pass
     return [int(i) for i in tokenizer.encode(wrap_system_tags(text))]
 
 
@@ -81,7 +87,7 @@ class VoicePrompt:
     waveform: torch.Tensor | None = None
 
 
-def _unpack_voices(archive: Path, parent: Path) -> Path:
+def unpack_voices(archive: Path, parent: Path) -> Path:
     """parent/voices, unpacked from archive unless it already exists.
 
     The archive is unpacked into a staging folder and renamed into place, so an
@@ -90,6 +96,8 @@ def _unpack_voices(archive: Path, parent: Path) -> Path:
     target = parent / VOICES_DIR_NAME
     if target.is_dir():
         return target
+    else:
+        pass
     staging = Path(tempfile.mkdtemp(prefix=f".{VOICES_DIR_NAME}-", dir=parent))
     try:
         with tarfile.open(archive, "r:gz") as tar:
@@ -99,11 +107,15 @@ def _unpack_voices(archive: Path, parent: Path) -> Path:
             raise RuntimeError(
                 f"{archive} did not contain a {VOICES_DIR_NAME}/ directory"
             )
+        else:
+            pass
         try:
             unpacked.rename(target)
         except OSError:
             if not target.is_dir():
                 raise
+            else:
+                pass
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return target
@@ -119,21 +131,25 @@ def voices_dir(model_dir: str | Path) -> Path:
     extracted = model_dir / VOICES_DIR_NAME
     if extracted.is_dir():
         return extracted
+    else:
+        pass
     archive = model_dir / VOICES_ARCHIVE_NAME
     if not archive.is_file():
         raise FileNotFoundError(
             f"no {VOICES_DIR_NAME}/ or {VOICES_ARCHIVE_NAME} under {model_dir}; "
             "pass a voice prompt path instead of a voice name"
         )
+    else:
+        pass
     try:
-        return _unpack_voices(archive, model_dir)
+        return unpack_voices(archive, model_dir)
     except OSError:
         fallback = (
             Path(tempfile.gettempdir())
             / f"sglang-omni-personaplex-{archive.stat().st_ino}"
         )
         fallback.mkdir(exist_ok=True)
-        return _unpack_voices(archive, fallback)
+        return unpack_voices(archive, fallback)
 
 
 def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
@@ -141,6 +157,8 @@ def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
     direct = Path(voice).expanduser()
     if direct.is_file():
         return direct
+    else:
+        pass
     folder = voices_dir(model_dir)
     candidates = [
         folder / voice,
@@ -149,6 +167,8 @@ def resolve_voice_path(model_dir: str | Path, voice: str) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
+        else:
+            pass
     available = sorted(p.stem for p in folder.glob("*.pt"))
     raise FileNotFoundError(f"unknown voice {voice!r}; packaged voices: {available}")
 
@@ -172,6 +192,8 @@ def pad_to_whole_frames(waveform: torch.Tensor) -> torch.Tensor:
     remainder = waveform.shape[-1] % SAMPLES_PER_FRAME
     if remainder:
         waveform = torch.nn.functional.pad(waveform, (0, SAMPLES_PER_FRAME - remainder))
+    else:
+        pass
     return waveform
 
 
@@ -193,6 +215,8 @@ def load_voice_prompt(
                 saved["cache"].to(torch.long), frames
             ),
         )
+    else:
+        pass
     channels = np.asarray(load_audio(str(path)), dtype=np.float32)
     mono = channels[0] if channels.ndim == 2 else channels
     mono = normalize_loudness(

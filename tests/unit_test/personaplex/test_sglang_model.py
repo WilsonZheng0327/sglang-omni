@@ -51,7 +51,7 @@ def test_backbone_tensors_map_onto_llama_names():
         list(backbone_weight("transformer.layers.1.unknown.weight", alpha))
 
 
-def _fake_model() -> SimpleNamespace:
+def fake_model() -> SimpleNamespace:
     loaded = SimpleNamespace(backbone=None, depformer=None)
     return SimpleNamespace(
         loaded=loaded,
@@ -68,7 +68,7 @@ def _fake_model() -> SimpleNamespace:
 
 
 def test_load_weights_routes_every_checkpoint_group():
-    model = _fake_model()
+    model = fake_model()
     text_emb = torch.randn(TEXT_CARD + 1, DIM)
     audio = {f"emb.{k}.weight": torch.randn(AUDIO_CARD + 1, DIM) for k in range(16)}
     weights = {
@@ -96,9 +96,7 @@ def test_load_weights_routes_every_checkpoint_group():
     assert set(model.loaded.depformer) == {"depformer_in.0.weight", "linears.0.weight"}
 
     with pytest.raises(KeyError, match="unexpected PersonaPlex tensor"):
-        PersonaPlexForCausalLM.load_weights(
-            _fake_model(), [("mystery", torch.zeros(1))]
-        )
+        PersonaPlexForCausalLM.load_weights(fake_model(), [("mystery", torch.zeros(1))])
 
 
 def test_embed_rows_reads_text_from_column_zero_and_codebook_k_from_column_k_plus_one():

@@ -229,8 +229,12 @@ def try_resolve_arch_from_personaplex_layout(
     """
     if os.path.isfile(os.path.join(model_path, _PERSONAPLEX_LAYOUT_MARKER)):
         return _PERSONAPLEX_ARCHITECTURE
+    else:
+        pass
     if os.path.isdir(model_path):
         return None
+    else:
+        pass
     try:
         hf_hub_download(
             repo_id=model_path,

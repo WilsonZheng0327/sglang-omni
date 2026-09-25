@@ -22,7 +22,7 @@ def test_local_tokenizer_marks_the_layout(tmp_path):
     assert try_resolve_arch_from_personaplex_layout(str(tmp_path)) == ARCH
 
 
-def _raise(exc):
+def hub_download_raising(exc):
     def fake_hub_download(**_):
         raise exc
 
@@ -39,13 +39,16 @@ def _raise(exc):
     ],
 )
 def test_hub_lookup_misses_are_not_personaplex(monkeypatch, exc):
-    monkeypatch.setattr("sglang_omni.utils.hf.hf_hub_download", _raise(exc))
+    monkeypatch.setattr(
+        "sglang_omni.utils.hf.hf_hub_download", hub_download_raising(exc)
+    )
     assert try_resolve_arch_from_personaplex_layout("org/other-model") is None
 
 
 def test_unexpected_hub_failures_propagate(monkeypatch):
     monkeypatch.setattr(
-        "sglang_omni.utils.hf.hf_hub_download", _raise(RuntimeError("bug"))
+        "sglang_omni.utils.hf.hf_hub_download",
+        hub_download_raising(RuntimeError("bug")),
     )
     with pytest.raises(RuntimeError, match="bug"):
         try_resolve_arch_from_personaplex_layout("org/other-model")

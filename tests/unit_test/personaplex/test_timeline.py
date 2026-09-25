@@ -26,11 +26,11 @@ from sglang_omni.models.personaplex.timeline import (
 AGENT_DELAYS = DELAYS[1:9]
 
 
-def _voice_codes(frames: int) -> torch.Tensor:
+def make_voice_codes(frames: int) -> torch.Tensor:
     return torch.arange(frames * 8).view(frames, 8) + 100
 
 
-def _user_codes(frames: int) -> torch.Tensor:
+def make_user_codes(frames: int) -> torch.Tensor:
     return torch.arange(frames * 8).view(frames, 8) + 500
 
 
@@ -43,7 +43,7 @@ def test_delay_stream_drops_frame_zero_and_seeds_initial_tokens():
 
 def test_prompt_frames_follow_the_reference_order():
     prompt = build_prompt_frames(
-        voice_frames=3, text_prompt_ids=[7, 8], voice_codes=_voice_codes(3)
+        voice_frames=3, text_prompt_ids=[7, 8], voice_codes=make_voice_codes(3)
     )
     silence, text = PROMPT_SILENCE_FRAMES, 2
     assert prompt.num_frames == 3 + silence + text + silence
@@ -51,7 +51,7 @@ def test_prompt_frames_follow_the_reference_order():
         prompt.text.tolist()
         == [TEXT_PAD_ID] * (3 + silence) + [7, 8] + [TEXT_PAD_ID] * silence
     )
-    assert prompt.agent[:3].tolist() == _voice_codes(3).tolist()
+    assert prompt.agent[:3].tolist() == make_voice_codes(3).tolist()
     assert prompt.agent[3:].tolist() == [list(SILENCE_CODES)] * (
         silence + text + silence
     )
@@ -60,9 +60,9 @@ def test_prompt_frames_follow_the_reference_order():
 
 def test_timeline_rows_and_generation_boundary():
     prompt = build_prompt_frames(
-        voice_frames=3, text_prompt_ids=[7, 8], voice_codes=_voice_codes(3)
+        voice_frames=3, text_prompt_ids=[7, 8], voice_codes=make_voice_codes(3)
     )
-    timeline = build_timeline(prompt, _user_codes(5))
+    timeline = build_timeline(prompt, make_user_codes(5))
     num_prompt = prompt.num_frames
     rows = timeline.prefill_tokens
     assert rows.shape == (num_prompt, 17)
@@ -85,7 +85,7 @@ def test_timeline_rows_and_generation_boundary():
 def test_packaged_voice_rows_come_from_embeddings():
     voice_frames = 4
     cache = torch.full((17, REFERENCE_CACHE_POSITIONS), -7, dtype=torch.long)
-    codes = _voice_codes(voice_frames)
+    codes = make_voice_codes(voice_frames)
     for frame in range(voice_frames):
         for k, delay in enumerate(AGENT_DELAYS):
             cache[1 + k, (frame + delay) % REFERENCE_CACHE_POSITIONS] = codes[frame, k]
@@ -98,7 +98,7 @@ def test_packaged_voice_rows_come_from_embeddings():
     prompt = build_prompt_frames(voice_frames=voice_frames, text_prompt_ids=[])
     embeddings = torch.randn(voice_frames - 1, 16)
     timeline = build_timeline(
-        prompt, _user_codes(2), voice_embeddings=embeddings, voice_tail_codes=tail
+        prompt, make_user_codes(2), voice_embeddings=embeddings, voice_tail_codes=tail
     )
     assert timeline.prefill_embedding_positions == [0, 1, 2]
     assert timeline.prefill_tokens[3, 1].item() == codes[3, 0].item()
@@ -114,7 +114,7 @@ def test_packaged_voice_row_count_is_checked():
     with pytest.raises(ValueError, match="stored rows"):
         build_timeline(
             prompt,
-            _user_codes(1),
+            make_user_codes(1),
             voice_embeddings=torch.zeros(2, 4),
             voice_tail_codes=tail,
         )

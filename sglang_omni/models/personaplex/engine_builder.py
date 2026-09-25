@@ -35,6 +35,8 @@ def shim_checkpoint_dir(source: Path, *, context_length: int) -> Path:
     weights = source / MOSHI_WEIGHTS_NAME
     if not weights.is_file():
         raise FileNotFoundError(f"PersonaPlex LM weights missing: {weights}")
+    else:
+        pass
     shim = Path(tempfile.mkdtemp(prefix="sglang-omni-personaplex-"))
     atexit.register(shutil.rmtree, shim, ignore_errors=True)
     (shim / MOSHI_WEIGHTS_NAME).symlink_to(weights)
@@ -56,6 +58,8 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
         self.model_arch_override = PERSONAPLEX_ARCH
         if context_length is not None:
             self.context_length = int(context_length)
+        else:
+            pass
 
     def resolve_checkpoint(self, model_path):
         source = Path(resolve_model_path(model_path))

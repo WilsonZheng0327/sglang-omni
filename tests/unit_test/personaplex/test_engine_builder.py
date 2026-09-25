@@ -14,7 +14,7 @@ from sglang_omni.models.personaplex.engine_builder import (
 from sglang_omni.models.personaplex.hf_config import DEFAULT_CONTEXT_LENGTH
 
 
-def _checkpoint(root):
+def write_checkpoint(root):
     root.mkdir(parents=True, exist_ok=True)
     (root / "model.safetensors").write_text("lm")
     (root / "tokenizer-e351c8d8-checkpoint125.safetensors").write_text("mimi")
@@ -23,7 +23,7 @@ def _checkpoint(root):
 
 
 def test_shim_links_only_the_lm_weights(tmp_path):
-    source = _checkpoint(tmp_path / "checkpoint")
+    source = write_checkpoint(tmp_path / "checkpoint")
     shim = shim_checkpoint_dir(source, context_length=4096)
     try:
         assert sorted(p.name for p in shim.iterdir()) == [
@@ -48,7 +48,7 @@ def test_shim_requires_the_lm_weights(tmp_path):
 def test_builder_context_length_reaches_the_shim(tmp_path):
     assert PersonaPlexEngineBuilder().context_length == DEFAULT_CONTEXT_LENGTH
     builder = PersonaPlexEngineBuilder(context_length=2048)
-    shim = Path(builder.resolve_checkpoint(str(_checkpoint(tmp_path))))
+    shim = Path(builder.resolve_checkpoint(str(write_checkpoint(tmp_path))))
     try:
         config = json.loads((shim / "config.json").read_text())
         assert config["max_position_embeddings"] == 2048

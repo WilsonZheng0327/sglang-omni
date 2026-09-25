@@ -60,7 +60,8 @@ def load_lm(checkpoint: Path, device: str) -> LMModel:
     base checkpoint has 8, and keeping 8 makes the depformer ring exactly one
     frame deep, which is the configuration the port's step-7 emulation targets.
     """
-    model = LMModel(device="meta", dtype=torch.bfloat16, **loaders._lm_kwargs)
+    lm_kwargs = loaders._lm_kwargs  # noqa: leading-underscore  # moshi's name
+    model = LMModel(device="meta", dtype=torch.bfloat16, **lm_kwargs)
     state = load_file(str(checkpoint / loaders.MOSHI_NAME), device=device)
     model.load_state_dict(state, strict=False, assign=True)
     return model.to(device=device, dtype=torch.bfloat16).eval()

@@ -23,7 +23,7 @@ from sglang_omni.proto.request import OmniRequest
 from sglang_omni.serve.openai_errors import is_bad_request_error
 
 
-def _payload(
+def make_payload(
     num_frames: int, params=None, metadata=None, num_samples: int = 0
 ) -> StagePayload:
     state = PersonaPlexState(
@@ -36,7 +36,7 @@ def _payload(
 
 
 def test_decode_budget_is_the_frame_count():
-    data = build_lm_request(_payload(9), vocab_size=32000)
+    data = build_lm_request(make_payload(9), vocab_size=32000)
     assert data.max_new_tokens == 9
     assert data.req.sampling_params.max_new_tokens == 9
     assert data.req.sampling_params.ignore_eos
@@ -61,14 +61,14 @@ def test_sampling_defaults_and_overrides():
     assert resolve_sampling({"seed": 42}).text_seed == sampling.text_seed
 
     data = build_lm_request(
-        _payload(2, {"temperature": 0.0, "seed": 42}), vocab_size=32000
+        make_payload(2, {"temperature": 0.0, "seed": 42}), vocab_size=32000
     )
     assert data.req.sampling_params.top_k == 1
     assert data.req.sampling_params.sampling_seed == sampling.text_seed
 
 
 def test_result_carries_text_ids_and_frames_and_drops_inputs():
-    data = build_lm_request(_payload(2), vocab_size=32000)
+    data = build_lm_request(make_payload(2), vocab_size=32000)
     data.output_ids = [3, 17]
     data.talker_model_inputs["frames"] = [torch.arange(8), torch.arange(8) + 8]
     state = PersonaPlexState.from_dict(apply_lm_result(data).data)
@@ -78,7 +78,7 @@ def test_result_carries_text_ids_and_frames_and_drops_inputs():
 
 
 def test_stream_builder_ships_pending_frames_to_the_codec():
-    data = build_lm_request(_payload(2, num_samples=3000), vocab_size=32000)
+    data = build_lm_request(make_payload(2, num_samples=3000), vocab_size=32000)
     assert lm_stream_output_builder("r", data, None) == []
     data.talker_model_inputs["pending_frames"].append(torch.arange(8))
     messages = lm_stream_output_builder("r", data, None)
@@ -91,7 +91,7 @@ def test_stream_builder_ships_pending_frames_to_the_codec():
 
 def test_request_boundary_rejects_unusable_inputs():
     with pytest.raises(ValueError, match="80 ms frame"):
-        build_lm_request(_payload(0), vocab_size=32000)
+        build_lm_request(make_payload(0), vocab_size=32000)
     no_audio = StagePayload(
         "r",
         request=OmniRequest(inputs={}, params={}),
@@ -123,7 +123,7 @@ def test_client_filler_sampling_values_keep_the_reference_defaults():
     assert stage_params.text_temperature == 1.0 and stage_params.text_top_k == -1
 
     data = build_lm_request(
-        _payload(2, filler, {EXPLICIT_GENERATION_PARAMS_KEY: ["temperature"]}),
+        make_payload(2, filler, {EXPLICIT_GENERATION_PARAMS_KEY: ["temperature"]}),
         vocab_size=32000,
     )
     assert data.req.sampling_params.temperature == 1.0
@@ -145,19 +145,21 @@ def test_lm_stage_params_set_audio_sampling_and_seed():
 
 
 def test_request_longer_than_the_context_is_rejected_with_the_limit():
-    data = build_lm_request(_payload(4), vocab_size=32000, context_length=4096)
+    data = build_lm_request(make_payload(4), vocab_size=32000, context_length=4096)
     prompt = data.talker_model_inputs["timeline"].num_prompt_positions
     fits = 4096 - 1 - prompt
-    build_lm_request(_payload(fits), vocab_size=32000, context_length=4096)
+    build_lm_request(make_payload(fits), vocab_size=32000, context_length=4096)
     with pytest.raises(ValueError, match=r"needs 4096 positions .* holds 4095"):
-        build_lm_request(_payload(fits + 1), vocab_size=32000, context_length=4096)
+        build_lm_request(make_payload(fits + 1), vocab_size=32000, context_length=4096)
 
 
 def test_request_errors_are_reported_as_bad_requests():
     raised = []
     for call in (
-        lambda: build_lm_request(_payload(0), vocab_size=32000),
-        lambda: build_lm_request(_payload(9000), vocab_size=32000, context_length=8192),
+        lambda: build_lm_request(make_payload(0), vocab_size=32000),
+        lambda: build_lm_request(
+            make_payload(9000), vocab_size=32000, context_length=8192
+        ),
         lambda: resolve_sampling({"seed": True}),
     ):
         with pytest.raises(ValueError) as error:

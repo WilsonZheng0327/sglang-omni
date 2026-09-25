@@ -112,14 +112,14 @@ class MimiAttention(nn.Module):
                 pos_k.view(1, -1) > (cursor - self.context).view(-1, 1)
             )
         else:
-            pos_k = self._write_ring(k, v, state)
+            pos_k = self.write_ring(k, v, state)
             k, v = state.keys, state.values
             delta = pos_q.view(-1, 1) - pos_k.view(1, -1)
             mask = (pos_k.view(1, -1) >= 0) & (delta >= 0) & (delta < self.context)
         out = functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         return self.out_proj(rearrange(out, "b h t d -> b t (h d)"))
 
-    def _write_ring(self, k, v, state: AttentionState) -> torch.Tensor:
+    def write_ring(self, k, v, state: AttentionState) -> torch.Tensor:
         """Store this step in the ring and label every slot as the reference does.
 
         The slot about to be overwritten is labelled as a future position, so
@@ -130,6 +130,8 @@ class MimiAttention(nn.Module):
         if state.keys is None:
             shape = (k.shape[0], k.shape[1], capacity, k.shape[3])
             state.keys, state.values = k.new_zeros(shape), v.new_zeros(shape)
+        else:
+            pass
         slots = torch.arange(k.shape[2], device=k.device) + state.end_offset
         state.keys.index_copy_(2, slots % capacity, k)
         state.values.index_copy_(2, slots % capacity, v)
@@ -239,7 +241,7 @@ class SEANetResnetBlock(StreamingModule):
         return x + y
 
     def init_state(self) -> list:
-        return _stack_state(self.block)
+        return stack_state(self.block)
 
     def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
         y = x
@@ -249,17 +251,17 @@ class SEANetResnetBlock(StreamingModule):
         return x + y
 
 
-def _run_stack(modules: nn.ModuleList, x: torch.Tensor) -> torch.Tensor:
+def run_stack(modules: nn.ModuleList, x: torch.Tensor) -> torch.Tensor:
     for module in modules:
         x = module(x)
     return x
 
 
-def _stack_state(modules: nn.ModuleList) -> list:
+def stack_state(modules: nn.ModuleList) -> list:
     return [m.init_state() for m in modules]
 
 
-def _step_stack(modules: nn.ModuleList, x: torch.Tensor, state: list) -> torch.Tensor:
+def step_stack(modules: nn.ModuleList, x: torch.Tensor, state: list) -> torch.Tensor:
     for module, module_state in zip(modules, state, strict=True):
         x = module.step(x, module_state)
     return x
@@ -289,13 +291,13 @@ class SEANetEncoder(StreamingModule):
         self.model = nn.ModuleList(layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return _run_stack(self.model, x)
+        return run_stack(self.model, x)
 
     def init_state(self) -> list:
-        return _stack_state(self.model)
+        return stack_state(self.model)
 
     def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
-        return _step_stack(self.model, x, state)
+        return step_stack(self.model, x, state)
 
 
 class SEANetDecoder(StreamingModule):
@@ -324,13 +326,13 @@ class SEANetDecoder(StreamingModule):
         self.model = nn.ModuleList(layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return _run_stack(self.model, x)
+        return run_stack(self.model, x)
 
     def init_state(self) -> list:
-        return _stack_state(self.model)
+        return stack_state(self.model)
 
     def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
-        return _step_stack(self.model, x, state)
+        return step_stack(self.model, x, state)
 
 
 class EuclideanCodebook(nn.Module):
@@ -354,17 +356,17 @@ class EuclideanCodebook(nn.Module):
         return functional.embedding(codes, self.embedding)
 
 
-class _VectorQuantization(nn.Module):
+class VectorQuantization(nn.Module):
     def __init__(self, dim: int, size: int) -> None:
         super().__init__()
-        self._codebook = EuclideanCodebook(dim, size)
+        self.codebook = EuclideanCodebook(dim, size)
 
 
-class _ResidualVQ(nn.Module):
+class ResidualVQ(nn.Module):
     def __init__(self, dim: int, size: int, num_codebooks: int) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
-            _VectorQuantization(dim, size) for _ in range(num_codebooks)
+            VectorQuantization(dim, size) for _ in range(num_codebooks)
         )
 
 
@@ -375,13 +377,13 @@ class ResidualVectorQuantizer(nn.Module):
         super().__init__()
         self.input_proj = nn.Conv1d(spec.dim, spec.codebook_dim, 1, bias=False)
         self.output_proj = nn.Conv1d(spec.codebook_dim, spec.dim, 1, bias=False)
-        self.vq = _ResidualVQ(spec.codebook_dim, spec.codebook_size, num_codebooks)
+        self.vq = ResidualVQ(spec.codebook_dim, spec.codebook_size, num_codebooks)
 
     def encode(self, x_BCT: torch.Tensor) -> torch.Tensor:
         residual = rearrange(self.input_proj(x_BCT), "b d t -> b t d")
         codes = []
         for layer in self.vq.layers:
-            book = layer._codebook
+            book = layer.codebook
             index = book.encode(rearrange(residual, "b t d -> (b t) d"))
             index = index.view(residual.shape[0], residual.shape[1])
             residual = residual - book.decode(index)
@@ -391,7 +393,7 @@ class ResidualVectorQuantizer(nn.Module):
     def decode(self, codes_BKT: torch.Tensor) -> torch.Tensor:
         quantized = None
         for k, layer in enumerate(self.vq.layers[: codes_BKT.shape[1]]):
-            level = rearrange(layer._codebook.decode(codes_BKT[:, k]), "b t d -> b d t")
+            level = rearrange(layer.codebook.decode(codes_BKT[:, k]), "b t d -> b d t")
             quantized = level if quantized is None else quantized + level
         return self.output_proj(quantized)
 
@@ -416,6 +418,8 @@ class SplitResidualVectorQuantizer(nn.Module):
             quantized = quantized + self.rvq_rest.decode(
                 codes_BKT[:, self.num_semantic :]
             )
+        else:
+            pass
         return quantized
 
 
@@ -498,6 +502,8 @@ class MimiCodec(nn.Module):
             return latent.new_empty(
                 latent.shape[0], self.spec.num_codebooks, 0, dtype=torch.long
             )
+        else:
+            pass
         return self.quantizer.encode(latent)
 
     def init_decode_state(self) -> MimiDecodeState:
@@ -520,6 +526,7 @@ RENAMES = (
     (re.compile(r"\.conv\.conv\."), ".conv."),
     (re.compile(r"\.convtr\.convtr\."), ".convtr."),
     (re.compile(r"_transformer\.transformer\."), "_transformer."),
+    (re.compile(r"\._codebook\."), ".codebook."),
 )
 ACOUSTIC_LAYER = re.compile(r"^quantizer\.rvq_rest\.vq\.layers\.(\d+)\.")
 
@@ -533,6 +540,8 @@ def rename_mimi_key(name: str) -> str | None:
     ):
         # Note (wilsonzheng0327): Trained with 32 codebooks; Moshi uses only 8.
         return None
+    else:
+        pass
     for pattern, replacement in RENAMES:
         # Note (wilsonzheng0327): The reference nests convolutions up to three deep
         # (downsample.conv.conv.conv); here each is one module.
@@ -540,6 +549,8 @@ def rename_mimi_key(name: str) -> str | None:
             renamed = pattern.sub(replacement, name, count=1)
             if renamed == name:
                 break
+            else:
+                pass
             name = renamed
     return name
 
@@ -551,6 +562,8 @@ def resolve_mimi_weights(model_dir: str | Path, glob: str) -> Path:
             f"Expected exactly one Mimi weight file matching {glob!r} in "
             f"{model_dir}, found {[m.name for m in matches]}"
         )
+    else:
+        pass
     return matches[0]
 
 
@@ -563,6 +576,8 @@ def load_mimi_codec(
         renamed = rename_mimi_key(name)
         if renamed is not None:
             state[renamed] = tensor
+        else:
+            pass
     codec = MimiCodec()
     codec.load_state_dict(state, strict=True)
     return codec.to(device=device).eval()

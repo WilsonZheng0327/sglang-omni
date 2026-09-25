@@ -20,7 +20,7 @@ from sglang_omni.models.personaplex.timeline import REFERENCE_CACHE_POSITIONS
 from sglang_omni.serve.openai_errors import is_bad_request_error
 
 
-class _Tokenizer:
+class FakeTokenizer:
     def encode(self, text):
         return [len(word) for word in text.split()]
 
@@ -31,17 +31,17 @@ class _Tokenizer:
 def test_system_tags_wrap_once():
     assert wrap_system_tags("  Be kind. ") == "<system> Be kind. <system>"
     assert wrap_system_tags("<system> x <system>") == "<system> x <system>"
-    assert tokenize_text_prompt(_Tokenizer(), "") == []
-    assert tokenize_text_prompt(_Tokenizer(), "Be kind") == [8, 2, 4, 8]
+    assert tokenize_text_prompt(FakeTokenizer(), "") == []
+    assert tokenize_text_prompt(FakeTokenizer(), "Be kind") == [8, 2, 4, 8]
 
 
 def test_decode_text_drops_frame_markers():
     ids = [TEXT_PAD_ID, 42, *sorted(TEXT_MARKER_IDS), 7]
-    assert decode_text(_Tokenizer(), ids) == "42 7"
-    assert decode_text(_Tokenizer(), [TEXT_PAD_ID]) == ""
+    assert decode_text(FakeTokenizer(), ids) == "42 7"
+    assert decode_text(FakeTokenizer(), [TEXT_PAD_ID]) == ""
 
 
-def _write_voices_archive(model_dir):
+def write_voices_archive(model_dir):
     voices = model_dir / "voices"
     voices.mkdir(parents=True)
     saved = {
@@ -56,7 +56,7 @@ def _write_voices_archive(model_dir):
 
 
 def test_voice_name_resolves_inside_the_packaged_archive(tmp_path):
-    _write_voices_archive(tmp_path)
+    write_voices_archive(tmp_path)
 
     path = resolve_voice_path(tmp_path, "NATF2")
     assert path == tmp_path / "voices" / "NATF2.pt"
@@ -76,7 +76,7 @@ def test_read_only_checkpoint_unpacks_voices_into_the_temp_dir_once(
 ):
     model_dir, temp_dir = tmp_path / "checkpoint", tmp_path / "tmp"
     temp_dir.mkdir()
-    _write_voices_archive(model_dir)
+    write_voices_archive(model_dir)
     make_staging = prompts.tempfile.mkdtemp
     unpacks = []
 
@@ -97,7 +97,7 @@ def test_read_only_checkpoint_unpacks_voices_into_the_temp_dir_once(
 
 
 def test_interrupted_unpack_leaves_no_partial_voices(tmp_path, monkeypatch):
-    _write_voices_archive(tmp_path)
+    write_voices_archive(tmp_path)
     monkeypatch.setattr(prompts.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
 

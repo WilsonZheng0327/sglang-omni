@@ -21,7 +21,7 @@ from sglang_omni.proto.request import OmniRequest
 VOICE_FRAMES = 4
 
 
-class _Depformer:
+class FakeDepformer:
     """Returns base + step codes, keeping forced ones, and records every call."""
 
     spec = SimpleNamespace(steps=8)
@@ -43,26 +43,26 @@ class _Depformer:
         return codes
 
 
-class _Model:
+class FakeModel:
     """Embeds a row as its own token ids, so fused inputs can be read back."""
 
     def __init__(self, max_batch: int = 2):
         self.fusion_buffer = torch.zeros(max_batch, NUM_STREAMS)
         self.hidden_out = torch.arange(max_batch * NUM_STREAMS, dtype=torch.float32)
         self.hidden_out = self.hidden_out.view(max_batch, NUM_STREAMS)
-        self.depformer = _Depformer()
+        self.depformer = FakeDepformer()
 
     def embed_rows(self, rows_NK: torch.Tensor) -> torch.Tensor:
         return rows_NK.to(torch.float32)
 
 
-def _runner(model: _Model) -> PersonaPlexModelRunner:
+def make_runner(model: FakeModel) -> PersonaPlexModelRunner:
     runner = PersonaPlexModelRunner.__new__(PersonaPlexModelRunner)
     runner.model = model
     return runner
 
 
-def _request(num_frames: int, *, voice: bool = False, params=None):
+def make_request(num_frames: int, *, voice: bool = False, params=None):
     state = PersonaPlexState(
         text_prompt_ids=[11, 12, 13],
         user_codes=torch.arange(num_frames * 8).view(num_frames, 8) + 500,
@@ -78,8 +78,8 @@ def _request(num_frames: int, *, voice: bool = False, params=None):
 
 
 def test_prefill_uses_stored_voice_rows_and_embeds_the_rest():
-    runner = _runner(_Model())
-    with_voice, without_voice = _request(3, voice=True), _request(2)
+    runner = make_runner(FakeModel())
+    with_voice, without_voice = make_request(3, voice=True), make_request(2)
     voice_timeline = with_voice.data.talker_model_inputs["timeline"]
     plain_timeline = without_voice.data.talker_model_inputs["timeline"]
     total = voice_timeline.num_prompt_positions + plain_timeline.num_prompt_positions
@@ -105,9 +105,9 @@ def test_prefill_uses_stored_voice_rows_and_embeds_the_rest():
 
 
 def test_decode_rows_chain_text_agent_codes_and_caller_frames():
-    model = _Model()
-    runner = _runner(model)
-    request = _request(3, voice=True)
+    model = FakeModel()
+    runner = make_runner(model)
+    request = make_request(3, voice=True)
     data = request.data
     timeline = data.talker_model_inputs["timeline"]
     first_position = timeline.num_prompt_positions
@@ -152,29 +152,29 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
 
 
 def test_seeded_audio_sampler_draws_reproducibly_from_one_generator():
-    runner = _runner(_Model())
+    runner = make_runner(FakeModel())
     logits = torch.randn(1, 64)
 
     def draws(request):
-        sampler = runner._audio_sampler(request.data)
+        sampler = runner.audio_sampler(request.data)
         return [int(sampler(logits)) for _ in range(5)]
 
     params = {"seed": 7, "audio_temperature": 1.0, "audio_top_k": 0}
-    first, second = _request(1, params=params), _request(1, params=params)
+    first, second = make_request(1, params=params), make_request(1, params=params)
     assert draws(first) == draws(second)
     generator = first.data.talker_model_inputs["audio_generator"]
-    runner._audio_sampler(first.data)
+    runner.audio_sampler(first.data)
     assert first.data.talker_model_inputs["audio_generator"] is generator
 
-    unseeded = _request(1, params={"audio_temperature": 1.0})
-    runner._audio_sampler(unseeded.data)
+    unseeded = make_request(1, params={"audio_temperature": 1.0})
+    runner.audio_sampler(unseeded.data)
     assert "audio_generator" not in unseeded.data.talker_model_inputs
 
 
 def test_resume_after_a_retract_replays_the_generated_positions():
-    model = _Model()
-    runner = _runner(model)
-    request = _request(5)
+    model = FakeModel()
+    runner = make_runner(model)
+    request = make_request(5)
     data = request.data
     timeline = data.talker_model_inputs["timeline"]
     prompt = timeline.num_prompt_positions

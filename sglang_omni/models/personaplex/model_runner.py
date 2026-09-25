@@ -44,65 +44,71 @@ class PersonaPlexModelRunner(ModelRunner):
         return False
 
     @property
-    def _device(self) -> torch.device:
+    def model_device(self) -> torch.device:
         return self.model.fusion_buffer.device
 
     @staticmethod
-    def _timeline(data) -> Timeline:
+    def request_timeline(data) -> Timeline:
         return data.talker_model_inputs["timeline"]
 
-    def _rows_to_device(self, data) -> dict:
+    def rows_on_device(self, data) -> dict:
         """Move the request's timeline tensors to the device once."""
         inputs = data.talker_model_inputs
         cached = inputs.get("device_rows")
         if cached is None:
-            timeline = self._timeline(data)
+            timeline = self.request_timeline(data)
             cached = {
-                "user_rows": timeline.user_rows.to(self._device),
-                "agent_row": timeline.agent_row_before_start.to(self._device),
+                "user_rows": timeline.user_rows.to(self.model_device),
+                "agent_row": timeline.agent_row_before_start.to(self.model_device),
             }
             inputs["device_rows"] = cached
+        else:
+            pass
         return cached
 
-    def _prefill_rows(self, data) -> torch.Tensor:
-        timeline = self._timeline(data)
+    def prefill_rows(self, data) -> torch.Tensor:
+        timeline = self.request_timeline(data)
         model = self.model
-        tokens = timeline.prefill_tokens.to(self._device)
+        tokens = timeline.prefill_tokens.to(self.model_device)
         dtype = model.fusion_buffer.dtype
         if not timeline.prefill_embedding_positions:
             return model.embed_rows(tokens).to(dtype)
-        stored = torch.as_tensor(timeline.prefill_embeddings, device=self._device).to(
-            dtype
-        )
-        known = torch.ones(tokens.shape[0], dtype=torch.bool, device=self._device)
+        else:
+            pass
+        stored = torch.as_tensor(
+            timeline.prefill_embeddings, device=self.model_device
+        ).to(dtype)
+        known = torch.ones(tokens.shape[0], dtype=torch.bool, device=self.model_device)
         known[timeline.prefill_embedding_positions] = False
         rows = torch.empty(
-            tokens.shape[0], stored.shape[1], dtype=dtype, device=self._device
+            tokens.shape[0], stored.shape[1], dtype=dtype, device=self.model_device
         )
         rows[timeline.prefill_embedding_positions] = stored
         rows[known] = model.embed_rows(tokens[known]).to(dtype)
         return rows
 
-    def _audio_sampler(self, data):
+    def audio_sampler(self, data):
         inputs = data.talker_model_inputs
         sampling = inputs["sampling"]
         generator = inputs.get("audio_generator")
         if generator is None and sampling.audio_seed is not None:
-            generator = torch.Generator(device=self._device)
+            generator = torch.Generator(device=self.model_device)
             generator.manual_seed(sampling.audio_seed)
             inputs["audio_generator"] = generator
+        else:
+            pass
         return lambda logits: sample_token(logits, sampling.audio, generator)
 
-    def _spell_frame(
+    def spell_frame(
         self, index: int, request, text_token: torch.Tensor, forced: torch.Tensor
     ) -> None:
         """Run the depformer for the position just predicted and record it."""
         data = request.data
         inputs = data.talker_model_inputs
-        device_rows = self._rows_to_device(data)
+        device_rows = self.rows_on_device(data)
         hidden = self.model.hidden_out[index : index + 1]
         codes = self.model.depformer.generate(
-            text_token.view(1), hidden, forced.view(1, -1), self._audio_sampler(data)
+            text_token.view(1), hidden, forced.view(1, -1), self.audio_sampler(data)
         )[0]
         frame = output_frame(device_rows["agent_row"], codes)
         device_rows["agent_row"] = codes
@@ -110,23 +116,23 @@ class PersonaPlexModelRunner(ModelRunner):
         inputs["frames"].append(frame)
         inputs["pending_frames"].append(frame)
 
-    def _free_codes(self) -> torch.Tensor:
+    def free_codes(self) -> torch.Tensor:
         return torch.full(
             (self.model.depformer.spec.steps,),
             -1,
             dtype=torch.long,
-            device=self._device,
+            device=self.model_device,
         )
 
-    def _generated_rows(self, data, generated: list[int]) -> torch.Tensor:
+    def generated_rows(self, data, generated: list[int]) -> torch.Tensor:
         """Embed the positions already generated, replayed after a retract."""
         model = self.model
-        timeline = self._timeline(data)
-        device_rows = self._rows_to_device(data)
+        timeline = self.request_timeline(data)
+        device_rows = self.rows_on_device(data)
         agent_rows = data.talker_model_inputs["agent_rows"]
         start = timeline.num_prompt_positions
         rows = torch.empty(
-            len(generated), NUM_STREAMS, dtype=torch.long, device=self._device
+            len(generated), NUM_STREAMS, dtype=torch.long, device=self.model_device
         )
         for index, token in enumerate(generated):
             rows[index, 0] = int(token)
@@ -140,21 +146,23 @@ class PersonaPlexModelRunner(ModelRunner):
             data = request.data
             inputs = data.talker_model_inputs
             generated = [int(token) for token in req.output_ids]
-            prompt_rows = self._prefill_rows(data)
+            prompt_rows = self.prefill_rows(data)
             if not generated:
-                inputs["prefill_forced"] = self._timeline(
+                inputs["prefill_forced"] = self.request_timeline(
                     data
-                ).forced_agent_at_start.to(self._device)
+                ).forced_agent_at_start.to(self.model_device)
                 rows.append(prompt_rows)
                 continue
+            else:
+                pass
             # Note (wilsonzheng0327): Resuming a retracted request replays the prompt
             # and every generated position, so those rows are embedded again too.
-            self._rows_to_device(data)["agent_row"] = inputs["agent_rows"][
+            self.rows_on_device(data)["agent_row"] = inputs["agent_rows"][
                 len(generated) - 1
             ]
-            inputs["prefill_forced"] = self._free_codes()
+            inputs["prefill_forced"] = self.free_codes()
             rows.append(
-                torch.cat([prompt_rows, self._generated_rows(data, generated)], dim=0)
+                torch.cat([prompt_rows, self.generated_rows(data, generated)], dim=0)
             )
         attach_omni_prefill_inputs(
             forward_batch,
@@ -169,10 +177,12 @@ class PersonaPlexModelRunner(ModelRunner):
             inputs = request.data.talker_model_inputs
             forced = inputs.pop("prefill_forced", None)
             if forced is None:
-                forced = self._timeline(request.data).forced_agent_at_start.to(
-                    self._device
+                forced = self.request_timeline(request.data).forced_agent_at_start.to(
+                    self.model_device
                 )
-            self._spell_frame(index, request, sampled[index], forced)
+            else:
+                pass
+            self.spell_frame(index, request, sampled[index], forced)
 
     def before_decode(
         self, forward_batch, schedule_batch, requests, *, is_lookahead=False
@@ -181,10 +191,10 @@ class PersonaPlexModelRunner(ModelRunner):
         rows = []
         for request, req in zip(requests, schedule_batch.reqs, strict=True):
             data = request.data
-            timeline = self._timeline(data)
-            device_rows = self._rows_to_device(data)
+            timeline = self.request_timeline(data)
+            device_rows = self.rows_on_device(data)
             position = timeline.input_position(len(req.output_ids))
-            row = torch.empty(NUM_STREAMS, dtype=torch.long, device=self._device)
+            row = torch.empty(NUM_STREAMS, dtype=torch.long, device=self.model_device)
             row[0] = int(req.output_ids[-1])
             row[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET] = device_rows["agent_row"]
             row[USER_STREAM_OFFSET:] = device_rows["user_rows"][position]
@@ -196,6 +206,6 @@ class PersonaPlexModelRunner(ModelRunner):
 
     def post_decode(self, result, forward_batch, schedule_batch, requests) -> None:
         sampled = result.next_token_ids
-        free = self._free_codes()
+        free = self.free_codes()
         for index, request in enumerate(requests):
-            self._spell_frame(index, request, sampled[index], free)
+            self.spell_frame(index, request, sampled[index], free)

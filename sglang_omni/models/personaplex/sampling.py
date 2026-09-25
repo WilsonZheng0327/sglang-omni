@@ -30,6 +30,8 @@ def sample_token(
     """
     if sampling.greedy:
         return logits.argmax(dim=-1)
+    else:
+        pass
     probs = torch.softmax(logits / sampling.temperature, dim=-1)
     if sampling.top_k > 0:
         probs, indices = torch.topk(probs, min(sampling.top_k, probs.shape[-1]), dim=-1)
@@ -39,6 +41,8 @@ def sample_token(
     choice = (probs / noise).argmax(dim=-1, keepdim=True)
     if indices is not None:
         choice = indices.gather(-1, choice)
+    else:
+        pass
     return choice[:, 0]
 
 

@@ -42,14 +42,14 @@ from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.device import resolve_concrete_device
 
 
-def _load_channels(source: str | bytes, *, source_name: str) -> np.ndarray:
+def load_channels(source: str | bytes, *, source_name: str) -> np.ndarray:
     """Any sample rate in, [channels, samples] float32 at 24 kHz out."""
     return load_audio(
         source, source_name=source_name, target_sample_rate=SAMPLE_RATE, mono=False
     )
 
 
-def _caller_audio_source(payload: StagePayload) -> str | bytes:
+def caller_audio_source(payload: StagePayload) -> str | bytes:
     """The caller recording: an audio_path-style input, or the one entry of
     audios that chat completions sends."""
     inputs = payload.request.inputs
@@ -59,14 +59,20 @@ def _caller_audio_source(payload: StagePayload) -> str | bytes:
             raise ValueError(
                 f"PersonaPlex takes one caller recording, got {len(audios)} audios"
             )
+        else:
+            pass
         return audios[0]
+    else:
+        pass
     return resolve_audio_source(payload)
 
 
-def _request_text_prompt(params: dict) -> str | None:
+def request_text_prompt(params: dict) -> str | None:
     for key in ("text_prompt", "instructions"):
         if key in params:
             return params[key]
+        else:
+            pass
     return DEFAULT_TEXT_PROMPT
 
 
@@ -79,8 +85,8 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
         params = stage_request_params(payload.request.params, PREPROCESSING_STAGE)
         # Note (wilsonzheng0327): Channel 0, not a downmix: in a two-party recording the
         # agent is on channel 1.
-        channels = _load_channels(
-            _caller_audio_source(payload), source_name="PersonaPlex"
+        channels = load_channels(
+            caller_audio_source(payload), source_name="PersonaPlex"
         )
         caller = torch.as_tensor(channels[0], dtype=torch.float32)
 
@@ -88,7 +94,7 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
         state.num_samples = int(caller.shape[-1])
         state.waveform = pad_to_whole_frames(caller)
         state.text_prompt_ids = tokenize_text_prompt(
-            tokenizer, _request_text_prompt(params)
+            tokenizer, request_text_prompt(params)
         )
 
         voice = params.get("voice", DEFAULT_VOICE)
@@ -98,22 +104,26 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
             if prompt is None:
                 prompt = load_voice_prompt(
                     path,
-                    load_audio=lambda p: _load_channels(
+                    load_audio=lambda p: load_channels(
                         p, source_name="PersonaPlex voice"
                     ),
                 )
                 voice_cache[path] = prompt
+            else:
+                pass
             state.voice_frames = prompt.frames
             state.voice_embeddings = prompt.embeddings
             state.voice_tail_codes = prompt.tail_codes
             state.voice_waveform = prompt.waveform
+        else:
+            pass
         payload.data = state.to_dict()
         return payload
 
     return SimpleScheduler(preprocess)
 
 
-def _codec(
+def load_codec(
     model_path: str, *, device: str | None, gpu_id: int | None
 ) -> tuple[MimiCodec, torch.device]:
     device = resolve_concrete_device(device, gpu_id)
@@ -124,7 +134,7 @@ def _codec(
 def create_mimi_encode_executor(
     model_path: str, *, device: str | None = None, gpu_id: int | None = None, **_
 ) -> SimpleScheduler:
-    codec, device = _codec(model_path, device=device, gpu_id=gpu_id)
+    codec, device = load_codec(model_path, device=device, gpu_id=gpu_id)
 
     def encode_waveform(waveform: torch.Tensor) -> torch.Tensor:
         codes = codec.encode(
@@ -136,8 +146,12 @@ def create_mimi_encode_executor(
         state = PersonaPlexState.from_dict(payload.data)
         if state.waveform is not None:
             state.user_codes = encode_waveform(state.waveform)
+        else:
+            pass
         if state.voice_waveform is not None:
             state.voice_codes = encode_waveform(state.voice_waveform)
+        else:
+            pass
         payload.data = state.to_dict()
         return payload
 
@@ -185,7 +199,7 @@ def create_decode_executor(model_path: str, **_) -> SimpleScheduler:
 def create_code2wav_executor(
     model_path: str, *, device: str | None = None, gpu_id: int | None = None, **_
 ) -> PersonaPlexCode2WavScheduler:
-    codec, device = _codec(model_path, device=device, gpu_id=gpu_id)
+    codec, device = load_codec(model_path, device=device, gpu_id=gpu_id)
 
     @torch.inference_mode()
     def decode(payload: StagePayload) -> StagePayload:

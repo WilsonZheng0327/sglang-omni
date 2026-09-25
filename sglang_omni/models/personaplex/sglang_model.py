@@ -100,6 +100,8 @@ class PersonaPlexForCausalLM(nn.Module):
     def forward(self, input_ids, positions, forward_batch, input_embeds=None, **_):
         if input_embeds is None:
             input_embeds = self.fusion_buffer[: input_ids.shape[0]]
+        else:
+            pass
         hidden = self.llm.model(input_ids, positions, forward_batch, input_embeds)
         if forward_batch.forward_mode.is_decode():
             self.hidden_out[: hidden.shape[0]] = hidden
