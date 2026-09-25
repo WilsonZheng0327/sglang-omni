@@ -110,7 +110,11 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
     lm_overrides = stage_param_overrides(params, LM_STAGE)
     lm_params = {**params, **lm_overrides}
     explicit = set(explicit_fields)
-    seed = lm_params.get("seed")
+    seed = stage_sampling.get("seed")
+    if seed is None:
+        seed = lm_params.get("seed")
+    else:
+        pass
     if isinstance(seed, bool):
         raise ValueError("PersonaPlex seed must be an integer")
     else:

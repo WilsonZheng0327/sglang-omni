@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """One decode step per caller frame; sampling knobs and seeds resolve as documented."""
 
+from typing import Literal
+
 import pytest
 import torch
 
+from sglang_omni.client.client import Client
+from sglang_omni.client.types import GenerateRequest, SamplingParams
 from sglang_omni.models.personaplex.architecture import (
     DEFAULT_AUDIO_TEMPERATURE,
     DEFAULT_AUDIO_TOP_K,
@@ -20,7 +24,12 @@ from sglang_omni.models.personaplex.request_builders import (
 )
 from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
 from sglang_omni.proto.request import OmniRequest
+from sglang_omni.serve.openai_api import (
+    build_chat_generate_request,
+    build_rollout_generate_request,
+)
 from sglang_omni.serve.openai_errors import is_bad_request_error
+from sglang_omni.serve.protocol import ChatCompletionRequest, RolloutGenerateRequest
 
 
 def make_payload(
@@ -166,3 +175,43 @@ def test_request_errors_are_reported_as_bad_requests():
             call()
         raised.append(error.value)
     assert all(is_bad_request_error(error) for error in raised)
+
+
+@pytest.mark.parametrize("request_source", ["client", "chat", "rollout"])
+@pytest.mark.parametrize("stage_seed, expected", [(None, 9), (0, 0), (42, 42)])
+def test_stage_seed_survives_request_conversion(
+    request_source: Literal["client", "chat", "rollout"],
+    stage_seed: int | None,
+    expected: int,
+) -> None:
+    if request_source == "chat":
+        request = build_chat_generate_request(
+            ChatCompletionRequest(
+                messages=[{"role": "user", "content": "hello"}],
+                seed=7,
+                stage_params={"lm": {"seed": 9}},
+                stage_sampling={"lm": {"seed": stage_seed}},
+            )
+        )
+    elif request_source == "rollout":
+        request = build_rollout_generate_request(
+            RolloutGenerateRequest(
+                prompt="hello",
+                sampling_params={"seed": 7},
+                stage_params={"lm": {"seed": 9}},
+                stage_sampling={"lm": {"seed": stage_seed}},
+            )
+        )
+    else:
+        request = GenerateRequest(
+            prompt="hello",
+            sampling=SamplingParams(seed=7),
+            stage_params={"lm": {"seed": 9}},
+            stage_sampling={"lm": SamplingParams(seed=stage_seed)},
+        )
+    lowered = Client.build_omni_request(request)
+    sampling = resolve_sampling(lowered.params)
+    assert sampling.seed == expected
+    data = build_lm_request(make_payload(2, lowered.params), vocab_size=32000)
+    assert data.req.sampling_params.sampling_seed == sampling.text_seed
+    assert data.talker_model_inputs["sampling"].audio_seed == sampling.audio_seed
