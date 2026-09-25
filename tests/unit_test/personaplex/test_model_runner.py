@@ -13,7 +13,10 @@ from sglang_omni.models.personaplex.architecture import (
 )
 from sglang_omni.models.personaplex.model_runner import PersonaPlexModelRunner
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
-from sglang_omni.models.personaplex.request_builders import build_lm_request
+from sglang_omni.models.personaplex.request_builders import (
+    apply_lm_result,
+    build_lm_request,
+)
 from sglang_omni.models.personaplex.timeline import output_frame
 from sglang_omni.proto import StagePayload
 from sglang_omni.proto.request import OmniRequest
@@ -228,3 +231,8 @@ def test_resume_after_a_retract_replays_the_generated_positions():
     frames = data.talker_model_inputs["frames"]
     assert len(frames) == frames_before + 1
     assert torch.equal(frames[-1], output_frame(agent_rows[-1], resumed.codes))
+
+    data.output_ids = generated + [80]
+    state = PersonaPlexState.from_dict(apply_lm_result(data).data)
+    assert state.text_ids == [3, 77, 78, 79]
+    assert data.output_ids == [77, 78, 79, 80]

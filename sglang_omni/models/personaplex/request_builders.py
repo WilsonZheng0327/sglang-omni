@@ -238,7 +238,12 @@ def apply_lm_result(data: SGLangARRequestData) -> StagePayload:
     payload = data.stage_payload
     state = PersonaPlexState.from_dict(payload.data)
     frames = data.talker_model_inputs["frames"]
-    state.text_ids = [int(i) for i in data.output_ids]
+    timeline = data.talker_model_inputs["timeline"]
+    # note (LinzeShi): Audio finishes one step after its undelayed text token.
+    text_ids = [int(timeline.prefill_tokens[-1, 0])] + [
+        int(token) for token in data.output_ids
+    ]
+    state.text_ids = text_ids[: len(frames)]
     state.codes = (
         torch.stack(frames).cpu() if frames else torch.zeros(0, 8, dtype=torch.long)
     )

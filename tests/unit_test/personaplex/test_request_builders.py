@@ -78,10 +78,11 @@ def test_sampling_defaults_and_overrides():
 
 def test_result_carries_text_ids_and_frames_and_drops_inputs():
     data = build_lm_request(make_payload(2), vocab_size=32000)
-    data.output_ids = [3, 17]
+    data.output_ids = [101, 102]
     data.talker_model_inputs["frames"] = [torch.arange(8), torch.arange(8) + 8]
     state = PersonaPlexState.from_dict(apply_lm_result(data).data)
-    assert state.text_ids == [3, 17]
+    assert state.text_ids == [TEXT_PAD_ID, 101]
+    assert data.output_ids == [101, 102]
     assert state.codes.tolist() == [list(range(8)), list(range(8, 16))]
     assert state.user_codes is None and state.waveform is None
 
@@ -215,3 +216,15 @@ def test_stage_seed_survives_request_conversion(
     data = build_lm_request(make_payload(2, lowered.params), vocab_size=32000)
     assert data.req.sampling_params.sampling_seed == sampling.text_seed
     assert data.talker_model_inputs["sampling"].audio_seed == sampling.audio_seed
+
+
+@pytest.mark.parametrize("num_frames", [0, 1, 2, 5])
+def test_result_text_follows_emitted_audio_without_trimming_history(num_frames: int):
+    data = build_lm_request(make_payload(max(1, num_frames)), vocab_size=32000)
+    tokens = list(range(101, 101 + num_frames))
+    data.output_ids = tokens.copy()
+    data.talker_model_inputs["frames"] = [torch.arange(8)] * num_frames
+    state = PersonaPlexState.from_dict(apply_lm_result(data).data)
+    assert state.text_ids == ([TEXT_PAD_ID] + tokens)[:num_frames]
+    assert len(state.text_ids) == state.codes.shape[0]
+    assert data.output_ids == tokens
