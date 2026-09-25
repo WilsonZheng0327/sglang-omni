@@ -84,9 +84,9 @@ class PersonaPlexForCausalLM(nn.Module):
         self.hidden_out = torch.zeros(max_batch, dim, dtype=dtype, device=device)
 
     def get_attention_sliding_window_size(self) -> int:
-        # Note (wilsonzheng0327): The reference attends where delta < context: the
-        # current step plus context - 1 earlier ones.
-        return self.temporal.context - 1
+        # note (LinzeShi): The full ring masks its oldest slot; the left window
+        # excludes the current key, leaving context - 1 visible keys in total.
+        return self.temporal.context - 2
 
     def embed_rows(self, rows_NK: torch.Tensor) -> torch.Tensor:
         """Sum the 17 stream embeddings of each row, in the reference's order

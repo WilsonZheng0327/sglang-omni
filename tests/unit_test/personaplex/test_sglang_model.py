@@ -120,7 +120,39 @@ def test_embed_rows_reads_text_from_column_zero_and_codebook_k_from_column_k_plu
     assert torch.equal(embedded, rows.float())
 
 
-def test_sliding_window_covers_the_reference_context():
+@pytest.mark.parametrize("query_count", [1, 3], ids=["decode", "prefill"])
+@pytest.mark.parametrize("boundary_offset", [-2, -1, 0, 1, 3001])
+def test_attention_matches_streaming_ring_at_wraparound(
+    query_count: int, boundary_offset: int
+) -> None:
+    capacity = TEMPORAL_TRANSFORMER.context
+    last_position = capacity + boundary_offset
+    positions = torch.arange(last_position + 1)
+    queries = positions[-query_count:]
     model = SimpleNamespace(temporal=TEMPORAL_TRANSFORMER)
     window = PersonaPlexForCausalLM.get_attention_sliding_window_size(model)
-    assert window == TEMPORAL_TRANSFORMER.context - 1
+    mask = (queries[:, None] >= positions) & (positions >= queries[:, None] - window)
+    keys = torch.zeros(1, 1, len(positions), 4)
+    values = positions.float().view(1, 1, -1, 1) / capacity
+    query = torch.zeros(1, 1, query_count, 4)
+    actual = torch.nn.functional.scaled_dot_product_attention(
+        query, keys, values, attn_mask=mask
+    )
+    slots = torch.arange(capacity)
+    for index, position in enumerate(queries.tolist()):
+        end_offset = position + 1
+        # note (LinzeShi): The ring labels its next overwrite slot as a future key.
+        delta = slots - end_offset % capacity
+        ring_positions = torch.where(
+            delta <= 0, end_offset + delta, end_offset + delta - capacity
+        )
+        visible = (slots < end_offset) & (ring_positions <= position)
+        stored_positions = position - (position - slots) % capacity
+        reference_positions = stored_positions[visible].sort().values
+        assert torch.equal(positions[mask[index]], reference_positions)
+        reference = torch.nn.functional.scaled_dot_product_attention(
+            query[:, :, index : index + 1],
+            keys[:, :, reference_positions],
+            values[:, :, reference_positions],
+        )
+        torch.testing.assert_close(actual[:, :, index : index + 1], reference)
