@@ -25,6 +25,7 @@ from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.prompts import VoicePrompt, load_packaged_voice
 from sglang_omni.models.personaplex.sampling import AudioSampling
 from sglang_omni.models.personaplex.timeline import (
+    PromptFrames,
     Timeline,
     build_prompt_frames,
     build_timeline,
@@ -121,13 +122,26 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
     )
 
 
-def timeline_from_state(
-    state: PersonaPlexState, packaged_voice: VoicePrompt | None = None
-) -> Timeline:
-    if state.user_codes is None:
-        raise ValueError("PersonaPlex LM request has no encoded caller audio")
+def packaged_voice_for(
+    state: PersonaPlexState, voice_cache: dict[str, VoicePrompt]
+) -> VoicePrompt | None:
+    """The packaged voice state names, loaded once per path."""
+    if state.voice_path is None:
+        return None
     else:
         pass
+    packaged_voice = voice_cache.get(state.voice_path)
+    if packaged_voice is None:
+        packaged_voice = load_packaged_voice(Path(state.voice_path))
+        voice_cache[state.voice_path] = packaged_voice
+    else:
+        pass
+    return packaged_voice
+
+
+def prompt_from_state(
+    state: PersonaPlexState, packaged_voice: VoicePrompt | None = None
+) -> tuple[PromptFrames, VoicePrompt]:
     voice = packaged_voice or VoicePrompt(frames=int(state.voice_frames))
     voice_codes = state.voice_codes
     prompt = build_prompt_frames(
@@ -135,12 +149,61 @@ def timeline_from_state(
         text_prompt_ids=[int(i) for i in state.text_prompt_ids],
         voice_codes=None if voice_codes is None else voice_codes.to(torch.long),
     )
+    return prompt, voice
+
+
+def timeline_from_state(
+    state: PersonaPlexState, packaged_voice: VoicePrompt | None = None
+) -> Timeline:
+    if state.user_codes is None:
+        raise ValueError("PersonaPlex LM request has no encoded caller audio")
+    else:
+        pass
+    prompt, voice = prompt_from_state(state, packaged_voice)
     return build_timeline(
         prompt,
         state.user_codes.to(torch.long),
         voice_embeddings=voice.embeddings,
         voice_tail_codes=voice.tail_codes,
     )
+
+
+def prompt_input_ids(timeline: Timeline) -> list[int]:
+    """Placeholder ids for SGLang's bookkeeping; the model runner embeds the real rows."""
+    # Note (wilsonzheng0327): The text stream's initial token is outside the
+    # vocabulary, so it is masked.
+    text_ids = timeline.prefill_tokens[:, 0].clone()
+    text_ids[text_ids >= TEXT_CARD] = TEXT_PAD_ID
+    return [int(i) for i in text_ids.tolist()]
+
+
+def lm_sampling_params(
+    sampling: RequestSampling, max_new_tokens: int
+) -> SamplingParams:
+    sampling_params = SamplingParams(
+        max_new_tokens=max_new_tokens,
+        temperature=sampling.text_temperature,
+        top_k=sampling.text_top_k,
+        ignore_eos=True,
+    )
+    sampling_params.normalize(tokenizer=None)
+    if sampling.text_seed is not None:
+        sampling_params.sampling_seed = sampling.text_seed
+    else:
+        pass
+    return sampling_params
+
+
+def new_model_inputs(timeline: Timeline, sampling: RequestSampling) -> dict:
+    """The runner's per-request state, shared by every unit of a session."""
+    return {
+        "timeline": timeline,
+        "sampling": sampling,
+        "agent_row": timeline.agent_row_before_start,
+        "agent_rows": [],
+        "frames": [],
+        "pending_frames": [],
+    }
 
 
 def build_lm_request(
@@ -156,16 +219,7 @@ def build_lm_request(
     voice_cache holds the packaged voices this stage has loaded, by path.
     """
     state = PersonaPlexState.from_dict(payload.data)
-    packaged_voice = None
-    if state.voice_path is not None:
-        packaged_voice = voice_cache.get(state.voice_path)
-        if packaged_voice is None:
-            packaged_voice = load_packaged_voice(Path(state.voice_path))
-            voice_cache[state.voice_path] = packaged_voice
-        else:
-            pass
-    else:
-        pass
+    packaged_voice = packaged_voice_for(state, voice_cache)
     timeline = timeline_from_state(state, packaged_voice)
     metadata = payload.request.metadata or {}
     sampling = resolve_sampling(
@@ -187,24 +241,8 @@ def build_lm_request(
     else:
         pass
 
-    sampling_params = SamplingParams(
-        max_new_tokens=timeline.num_frames,
-        temperature=sampling.text_temperature,
-        top_k=sampling.text_top_k,
-        ignore_eos=True,
-    )
-    sampling_params.normalize(tokenizer=None)
-    if sampling.text_seed is not None:
-        sampling_params.sampling_seed = sampling.text_seed
-    else:
-        pass
-
-    # Note (wilsonzheng0327): Placeholder ids for SGLang's bookkeeping; the model runner
-    # embeds the real rows. The text stream's initial token is outside the vocabulary,
-    # so it is masked.
-    text_ids = timeline.prefill_tokens[:, 0].clone()
-    text_ids[text_ids >= TEXT_CARD] = TEXT_PAD_ID
-    input_ids = [int(i) for i in text_ids.tolist()]
+    sampling_params = lm_sampling_params(sampling, timeline.num_frames)
+    input_ids = prompt_input_ids(timeline)
     req = Req(
         rid=payload.request_id,
         origin_input_text="",
@@ -219,14 +257,8 @@ def build_lm_request(
         max_new_tokens=timeline.num_frames,
         temperature=sampling.text_temperature,
     )
-    data.talker_model_inputs = {
-        "timeline": timeline,
-        "sampling": sampling,
-        "num_samples": int(state.num_samples),
-        "agent_rows": [],
-        "frames": [],
-        "pending_frames": [],
-    }
+    data.talker_model_inputs = new_model_inputs(timeline, sampling)
+    data.talker_model_inputs["num_samples"] = int(state.num_samples)
     return data
 
 
@@ -279,7 +311,12 @@ __all__ = [
     "RequestSampling",
     "apply_lm_result",
     "build_lm_request",
+    "lm_sampling_params",
     "lm_stream_output_builder",
+    "new_model_inputs",
+    "packaged_voice_for",
+    "prompt_from_state",
+    "prompt_input_ids",
     "resolve_sampling",
     "stage_request_params",
     "timeline_from_state",

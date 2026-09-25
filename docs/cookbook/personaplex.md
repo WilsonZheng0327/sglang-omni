@@ -2,7 +2,7 @@
 
 [nvidia/personaplex-7b-v1](https://huggingface.co/nvidia/personaplex-7b-v1) is a 7B full-duplex speech-to-speech model built on [Moshi](https://arxiv.org/abs/2410.00037): every 80 ms it reads one text token and 16 [Mimi](https://huggingface.co/kyutai/mimi) codes (8 for what it says, 8 for what it hears) and writes the next frame. A voice prompt and a `<system>` role prompt set the persona, and the model decides for itself when to speak; there is no VAD.
 
-SGLang-Omni serves it as an **offline** pipeline: one recording of the caller's side in, the agent's reply as text and 24 kHz audio of the same length out. Live duplex sessions over `/v1/realtime` are tracked in [#1909](https://github.com/sgl-project/sglang-omni/issues/1909).
+SGLang-Omni serves it two ways: an **offline** pipeline (one recording of the caller's side in, the agent's reply as text and 24 kHz audio of the same length out), and a **realtime** variant that holds a live full-duplex call over `/v1/realtime`, one 80 ms frame at a time ([#1909](https://github.com/sgl-project/sglang-omni/issues/1909)).
 
 ## Prerequisites
 
@@ -52,6 +52,26 @@ curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -
 }'
 ```
 
+## Full-duplex calls over `/v1/realtime`
+
+The realtime variant runs the same model as a live call: the client streams the caller's microphone, and the server streams the agent's voice back continuously, speaking, listening and interrupting as the model decides.
+
+```bash
+python -m sglang_omni.cli serve --config examples/configs/personaplex_realtime.yaml --enable-realtime --port 8000
+```
+
+Each 80 ms unit of caller audio (24 kHz mono PCM16, 3840 bytes) travels preprocessing → Mimi encode → LM → Mimi decode as one step. The LM holds one SGLang streaming session per call: the first unit prefills the voice and role prompt and steps once, and every later unit extends the retained KV cache by exactly one position, so a call produces the same frames as the offline pipeline given the same audio.
+
+Open `ws://localhost:8000/v1/realtime`, wait for `session.created`, then send `session.update`. `instructions` sets the role prompt; the voice is the default (`NATF2`). The server grants `native_unit_ms: 80`, one output modality (`audio` by default, with the spoken words as `response.output_audio_transcript.delta`; or `text`), and pads a trailing partial unit (`tail_policy: pad`). Stream audio with `input_audio_buffer.append` (`sglang.seq` counting up from 0) and finish with `sglang.input_audio.end`.
+
+```json
+{"event_id": "e0", "type": "session.update", "session": {"instructions": "You are a patient support agent."}}
+{"event_id": "e1", "type": "input_audio_buffer.append", "audio": "<base64 PCM16>", "sglang": {"seq": 0}}
+{"event_id": "e9", "type": "sglang.input_audio.end"}
+```
+
+The whole call is one response: `response.created` arrives with the first unit's output, `response.output_audio.delta` carries 80 ms of agent audio per unit (160 ms for the first), and `response.done` follows the end of the caller's input. The realtime variant serves only `/v1/realtime`; use the default variant for `/generate` and chat completions.
+
 ## Request parameters
 
 | Parameter | Effect |
@@ -65,13 +85,15 @@ curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -
 
 ## Known limitations
 
-- Offline, one request at a time (`max_running_requests=1`).
+- Offline, one request at a time (`max_running_requests=1`); realtime, one call at a time for the same reason. Raise `--lm.engine.max_running_requests` for more.
+- A realtime unit's output is released once the whole route has finished it, so each 80 ms frame must clear Mimi encode, the LM, the depformer and Mimi decode within 80 ms, or the call falls behind.
+- A realtime call is bounded by the LM context like an offline request (about 10.8 minutes at 8192 positions); the unit that would pass it fails with the limit in the message.
 - CUDA graphs are off; a 7B decode step plus 8 depformer steps runs close to the 80 ms frame budget rather than well inside it.
 - Past the 3000-position attention window (about four minutes) a sliding window stands in for the reference's ring cache. Behaviour matches the reference there, but long-input quality was judged by listening, not measured.
 
 ## Tests
 
-`tests/unit_test/personaplex/` runs on CPU without weights: the delayed timeline, chunked Mimi against whole-sequence Mimi, the depformer, checkpoint weight routing, the model-runner hooks, the streaming codec stage, the checkpoint shim, preprocessing and voice unpacking, and request lowering.
+`tests/unit_test/personaplex/` runs on CPU without weights: the delayed timeline, chunked Mimi against whole-sequence Mimi, the depformer, checkpoint weight routing, the model-runner hooks, the streaming codec stage, the checkpoint shim, preprocessing and voice unpacking, and request lowering. `test_session.py` drives a realtime call unit by unit through the LM session adapter and the model runner and checks every forward's input rows and every output frame against one offline request; `test_realtime.py` runs a call over the `/v1/realtime` WebSocket against a scripted pipeline.
 
 `tests/test_model/test_personaplex_parity.py` (marker `accelerator`, one GPU) recreates the greedy parity numbers: it runs the port and the reference's `moshi.offline --greedy` on the reference checkout's `assets/test` recordings (`input_assistant.wav` with `NATF2`, `input_service.wav` with `NATM1` and the service prompt) and compares the reply audio frame by frame. Because the reference is not deterministic past its first near-tie, each case asserts at least 100 leading identical frames and matching text up to the first divergence; two more tests check that the port is identical across reruns and that `seed` makes sampling reproducible. The measured frame counts and texts are printed (`-s`). The reference pins an older torch, so it runs from its own interpreter:
 

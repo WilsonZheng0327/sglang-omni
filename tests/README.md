@@ -902,7 +902,12 @@ that happened to contain an older version of the test.
   channel, `audios` input, role prompt, voice resolution, `stage_params`),
   voice-archive unpacking (read-only fallback, no partial folder), and
   request lowering (decode budget, reference sampling defaults unless the
-  caller set a field, seeds, stream chunks, context limit, input validation). CPU
+  caller set a field, seeds, stream chunks, context limit, input validation),
+  and full-duplex sessions (a call stepped unit by unit through the LM session
+  adapter and model runner matches one offline request row for row and frame
+  for frame, rollback of an unfinished unit, streaming Mimi encode and decode
+  per session, the realtime route, capabilities and events, and a call over
+  the `/v1/realtime` WebSocket against a scripted pipeline). CPU
   only, no weights; runner and request tests need SGLang but start no engine.
 
 - `unit_test/llada2_uni/`: LLaDA2-Uni request lowering to the upstream

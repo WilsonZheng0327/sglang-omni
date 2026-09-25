@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Stage factories: preprocessing, Mimi encode, the LM engine, decode and code2wav."""
+"""Stage factories: preprocessing, Mimi encode, the LM engine, decode and code2wav,
+offline and as full-duplex sessions."""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from sentencepiece import SentencePieceProcessor
 
 from sglang_omni.models.personaplex.architecture import MIMI_WEIGHTS_GLOB, SAMPLE_RATE
 from sglang_omni.models.personaplex.code2wav_stream import (
@@ -19,7 +21,10 @@ from sglang_omni.models.personaplex.components.mimi import (
     resolve_mimi_weights,
 )
 from sglang_omni.models.personaplex.config import PREPROCESSING_STAGE
-from sglang_omni.models.personaplex.engine_builder import PersonaPlexEngineBuilder
+from sglang_omni.models.personaplex.engine_builder import (
+    PersonaPlexEngineBuilder,
+    PersonaPlexRealtimeEngineBuilder,
+)
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.models.personaplex.prompts import (
     DEFAULT_TEXT_PROMPT,
@@ -34,9 +39,17 @@ from sglang_omni.models.personaplex.prompts import (
     tokenize_text_prompt,
 )
 from sglang_omni.models.personaplex.request_builders import stage_request_params
+from sglang_omni.models.personaplex.session import (
+    Code2WavSessionHooks,
+    MimiEncodeSessionHooks,
+    PromptPreparer,
+    PromptSessionHooks,
+    encode_waveform,
+)
 from sglang_omni.models.weight_loader import resolve_model_path
 from sglang_omni.preprocessing.transcription import resolve_audio_source
-from sglang_omni.proto import StagePayload
+from sglang_omni.proto import OmniRequest, StagePayload
+from sglang_omni.scheduling.session import SessionScheduler
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.utils.audio import load_audio
 from sglang_omni.utils.audio_payload import audio_waveform_payload
@@ -77,27 +90,17 @@ def request_text_prompt(params: dict) -> str | None:
     return DEFAULT_TEXT_PROMPT
 
 
-def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
-    model_dir = Path(resolve_model_path(model_path))
-    tokenizer = load_text_tokenizer(model_dir)
+def prompt_preparer(
+    model_dir: Path, tokenizer: SentencePieceProcessor
+) -> PromptPreparer:
+    """The text prompt and voice a request asks for, as the LM's prompt state."""
     recorded_voices: dict[Path, VoicePrompt] = {}
 
-    def preprocess(payload: StagePayload) -> StagePayload:
-        params = stage_request_params(payload.request.params, PREPROCESSING_STAGE)
-        # Note (wilsonzheng0327): Channel 0, not a downmix: in a two-party recording the
-        # agent is on channel 1.
-        channels = load_channels(
-            caller_audio_source(payload), source_name="PersonaPlex"
+    def prepare_prompt(request: OmniRequest) -> PersonaPlexState:
+        params = stage_request_params(request.params, PREPROCESSING_STAGE)
+        state = PersonaPlexState(
+            text_prompt_ids=tokenize_text_prompt(tokenizer, request_text_prompt(params))
         )
-        caller = torch.as_tensor(channels[0], dtype=torch.float32)
-
-        state = PersonaPlexState.from_dict(payload.data)
-        state.num_samples = int(caller.shape[-1])
-        state.waveform = pad_to_whole_frames(caller)
-        state.text_prompt_ids = tokenize_text_prompt(
-            tokenizer, request_text_prompt(params)
-        )
-
         voice = params.get("voice", DEFAULT_VOICE)
         if voice:
             path = resolve_voice_path(model_dir, str(voice))
@@ -121,10 +124,37 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
                 state.voice_waveform = prompt.waveform
         else:
             pass
+        return state
+
+    return prepare_prompt
+
+
+def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
+    model_dir = Path(resolve_model_path(model_path))
+    prepare_prompt = prompt_preparer(model_dir, load_text_tokenizer(model_dir))
+
+    def preprocess(payload: StagePayload) -> StagePayload:
+        # Note (wilsonzheng0327): Channel 0, not a downmix: in a two-party recording the
+        # agent is on channel 1.
+        channels = load_channels(
+            caller_audio_source(payload), source_name="PersonaPlex"
+        )
+        caller = torch.as_tensor(channels[0], dtype=torch.float32)
+
+        state = prepare_prompt(payload.request)
+        state.num_samples = int(caller.shape[-1])
+        state.waveform = pad_to_whole_frames(caller)
         payload.data = state.to_dict()
         return payload
 
     return SimpleScheduler(preprocess)
+
+
+def create_realtime_preprocessing_executor(model_path: str, **_) -> SessionScheduler:
+    model_dir = Path(resolve_model_path(model_path))
+    return SessionScheduler(
+        PromptSessionHooks(prompt_preparer(model_dir, load_text_tokenizer(model_dir)))
+    )
 
 
 def load_codec(
@@ -140,26 +170,27 @@ def create_mimi_encode_executor(
 ) -> SimpleScheduler:
     codec, device = load_codec(model_path, device=device, gpu_id=gpu_id)
 
-    def encode_waveform(waveform: torch.Tensor) -> torch.Tensor:
-        codes = codec.encode(
-            waveform.to(device=device, dtype=torch.float32).view(1, 1, -1)
-        )
-        return codes[0].T.cpu()
-
     def encode(payload: StagePayload) -> StagePayload:
         state = PersonaPlexState.from_dict(payload.data)
         if state.waveform is not None:
-            state.user_codes = encode_waveform(state.waveform)
+            state.user_codes = encode_waveform(codec, device, state.waveform)
         else:
             pass
         if state.voice_waveform is not None:
-            state.voice_codes = encode_waveform(state.voice_waveform)
+            state.voice_codes = encode_waveform(codec, device, state.voice_waveform)
         else:
             pass
         payload.data = state.to_dict()
         return payload
 
     return SimpleScheduler(encode)
+
+
+def create_realtime_mimi_encode_executor(
+    model_path: str, *, device: str | None = None, gpu_id: int | None = None, **_
+) -> SessionScheduler:
+    codec, device = load_codec(model_path, device=device, gpu_id=gpu_id)
+    return SessionScheduler(MimiEncodeSessionHooks(codec, device))
 
 
 def create_lm_executor(
@@ -171,6 +202,23 @@ def create_lm_executor(
     server_args_overrides: dict[str, object] | None = None,
 ):
     return PersonaPlexEngineBuilder().build(
+        model_path,
+        device=device,
+        gpu_id=gpu_id,
+        dtype=dtype,
+        server_args_overrides=server_args_overrides,
+    )
+
+
+def create_realtime_lm_executor(
+    model_path: str,
+    *,
+    dtype: str = "bfloat16",
+    device: str | None = None,
+    gpu_id: int | None = None,
+    server_args_overrides: dict[str, object] | None = None,
+):
+    return PersonaPlexRealtimeEngineBuilder().build(
         model_path,
         device=device,
         gpu_id=gpu_id,
@@ -218,10 +266,22 @@ def create_code2wav_executor(
     return PersonaPlexCode2WavScheduler(codec, compute_fn=decode)
 
 
+def create_realtime_code2wav_executor(
+    model_path: str, *, device: str | None = None, gpu_id: int | None = None, **_
+) -> SessionScheduler:
+    codec, device = load_codec(model_path, device=device, gpu_id=gpu_id)
+    tokenizer = load_text_tokenizer(resolve_model_path(model_path))
+    return SessionScheduler(Code2WavSessionHooks(codec, device, tokenizer))
+
+
 __all__ = [
     "create_code2wav_executor",
     "create_decode_executor",
     "create_lm_executor",
     "create_mimi_encode_executor",
     "create_preprocessing_executor",
+    "create_realtime_code2wav_executor",
+    "create_realtime_lm_executor",
+    "create_realtime_mimi_encode_executor",
+    "create_realtime_preprocessing_executor",
 ]

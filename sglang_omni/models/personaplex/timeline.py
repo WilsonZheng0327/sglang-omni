@@ -162,10 +162,6 @@ class Timeline:
     num_prompt_positions: int
     num_frames: int
 
-    def input_position(self, forward_index: int) -> int:
-        """Position of the row forward j consumes (j = 0: last prefill row)."""
-        return self.num_prompt_positions - 1 + forward_index
-
 
 def build_timeline(
     prompt: PromptFrames,
@@ -245,6 +241,28 @@ def build_timeline(
     )
 
 
+def extend_user_rows(
+    user_frames_FK: torch.Tensor, user_rows: torch.Tensor
+) -> torch.Tensor:
+    """Append the user rows of positions user_rows.shape[0] .. F-1.
+
+    The same rows delay_stream builds for the whole of user_frames_FK; every
+    appended position lies past the largest delay, so none holds the initial token.
+    """
+    start = user_rows.shape[0]
+    end = user_frames_FK.shape[0]
+    delays = DELAYS[USER_STREAM_OFFSET:]
+    assert start > max(delays), (start, delays)
+    new_rows = torch.stack(
+        [
+            user_frames_FK[start - delay : end - delay, k]
+            for k, delay in enumerate(delays)
+        ],
+        dim=1,
+    )
+    return torch.cat([user_rows, new_rows], dim=0)
+
+
 def output_frame(
     previous_agent_row: torch.Tensor, agent_row: torch.Tensor
 ) -> torch.Tensor:
@@ -266,6 +284,7 @@ __all__ = [
     "build_prompt_frames",
     "build_timeline",
     "delay_stream",
+    "extend_user_rows",
     "output_frame",
     "voice_tail_codes_from_cache",
 ]

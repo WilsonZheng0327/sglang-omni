@@ -84,6 +84,15 @@ def make_request(num_frames: int, *, voice: bool = False, params=None):
     )
 
 
+def scheduled(request, output_ids=(), prefix_len: int = 0):
+    """The scheduler's Req for request: prompt ids, generated ids, cached prefix."""
+    return SimpleNamespace(
+        origin_input_ids=list(request.data.req.origin_input_ids),
+        output_ids=list(output_ids),
+        prefix_indices=range(prefix_len),
+    )
+
+
 def test_prefill_uses_stored_voice_rows_and_embeds_the_rest():
     runner = make_runner(FakeModel())
     with_voice, without_voice = make_request(3, voice=True), make_request(2)
@@ -92,10 +101,9 @@ def test_prefill_uses_stored_voice_rows_and_embeds_the_rest():
     total = voice_timeline.num_prompt_positions + plain_timeline.num_prompt_positions
     forward_batch = SimpleNamespace(replace_embeds=None, input_ids=torch.zeros(total))
 
-    fresh = SimpleNamespace(output_ids=[])
     runner.before_prefill(
         forward_batch,
-        SimpleNamespace(reqs=[fresh, fresh]),
+        SimpleNamespace(reqs=[scheduled(with_voice), scheduled(without_voice)]),
         [with_voice, without_voice],
     )
 
@@ -132,7 +140,7 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     )
 
     runner.before_decode(
-        None, SimpleNamespace(reqs=[SimpleNamespace(output_ids=[77])]), [request]
+        None, SimpleNamespace(reqs=[scheduled(request, [77])]), [request]
     )
     row = model.fusion_buffer[0].long()
     assert row[0].item() == 77
@@ -150,7 +158,7 @@ def test_decode_rows_chain_text_agent_codes_and_caller_frames():
     assert len(data.talker_model_inputs["pending_frames"]) == 2
 
     runner.before_decode(
-        None, SimpleNamespace(reqs=[SimpleNamespace(output_ids=[77, 78])]), [request]
+        None, SimpleNamespace(reqs=[scheduled(request, [77, 78])]), [request]
     )
     row = model.fusion_buffer[0].long()
     assert row[0].item() == 78
@@ -188,7 +196,7 @@ def test_resume_after_a_retract_replays_the_generated_positions():
 
     runner.before_prefill(
         SimpleNamespace(replace_embeds=None, input_ids=torch.zeros(prompt)),
-        SimpleNamespace(reqs=[SimpleNamespace(output_ids=[])]),
+        SimpleNamespace(reqs=[scheduled(request)]),
         [request],
     )
     runner.post_prefill(
@@ -196,7 +204,7 @@ def test_resume_after_a_retract_replays_the_generated_positions():
     )
     for token, before in ((78, [77]), (79, [77, 78])):
         runner.before_decode(
-            None, SimpleNamespace(reqs=[SimpleNamespace(output_ids=before)]), [request]
+            None, SimpleNamespace(reqs=[scheduled(request, before)]), [request]
         )
         runner.post_decode(
             SimpleNamespace(next_token_ids=torch.tensor([token])), None, None, [request]
@@ -212,7 +220,7 @@ def test_resume_after_a_retract_replays_the_generated_positions():
     )
     runner.before_prefill(
         forward_batch,
-        SimpleNamespace(reqs=[SimpleNamespace(output_ids=generated)]),
+        SimpleNamespace(reqs=[scheduled(request, generated)]),
         [request],
     )
 

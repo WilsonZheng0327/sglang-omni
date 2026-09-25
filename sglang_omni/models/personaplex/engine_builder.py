@@ -22,6 +22,7 @@ from sglang_omni.models.personaplex.request_builders import (
     build_lm_request,
     lm_stream_output_builder,
 )
+from sglang_omni.models.personaplex.session import PersonaPlexSessionAdapter
 from sglang_omni.models.weight_loader import resolve_model_path
 from sglang_omni.scheduling.engine_factory import TtsEngineBuilder
 
@@ -95,3 +96,28 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
 
     def extra_scheduler_kwargs(self):
         return {"stream_output_builder": lm_stream_output_builder}
+
+
+class PersonaPlexRealtimeEngineBuilder(PersonaPlexEngineBuilder):
+    """The LM of a full-duplex deployment: one SGLang streaming session per call."""
+
+    session_adapter: PersonaPlexSessionAdapter | None = None
+
+    def generation_defaults(self, *, dtype):
+        return {
+            **super().generation_defaults(dtype=dtype),
+            "enable_streaming_session": True,
+        }
+
+    def make_adapters(self, model):
+        # Note (wilsonzheng0327): build_runtime asks for the adapters before the
+        # scheduler kwargs, so the session adapter can take the model's vocabulary.
+        self.session_adapter = PersonaPlexSessionAdapter(
+            vocab_size=int(model.config.vocab_size),
+            context_length=self.context_length,
+        )
+        return super().make_adapters(model)
+
+    def extra_scheduler_kwargs(self):
+        assert self.session_adapter is not None
+        return {"session_adapter": self.session_adapter}

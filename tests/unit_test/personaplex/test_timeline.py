@@ -19,6 +19,7 @@ from sglang_omni.models.personaplex.timeline import (
     build_prompt_frames,
     build_timeline,
     delay_stream,
+    extend_user_rows,
     output_frame,
     voice_tail_codes_from_cache,
 )
@@ -79,7 +80,6 @@ def test_timeline_rows_and_generation_boundary():
     assert timeline.user_rows[num_prompt + 1].tolist() == [508, *range(501, 508)]
     assert timeline.user_rows.shape[0] == num_prompt + 5
     assert timeline.num_frames == 5
-    assert timeline.input_position(0) == num_prompt - 1
 
 
 def test_packaged_voice_rows_come_from_embeddings():
@@ -124,3 +124,15 @@ def test_output_frame_takes_undelayed_codebook_from_previous_row():
     previous = torch.arange(8)
     current = torch.arange(8) + 10
     assert output_frame(previous, current).tolist() == [0, 11, 12, 13, 14, 15, 16, 17]
+
+
+def test_user_rows_extended_frame_by_frame_match_the_whole_timeline():
+    prompt = build_prompt_frames(voice_frames=0, text_prompt_ids=[7, 8])
+    caller = make_user_codes(4)
+    whole = build_timeline(prompt, caller)
+    rows = build_timeline(prompt, caller[:0]).user_rows
+    frames = prompt.user
+    for frame in caller:
+        frames = torch.cat([frames, frame[None]])
+        rows = extend_user_rows(frames, rows)
+    assert torch.equal(rows, whole.user_rows)
