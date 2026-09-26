@@ -86,8 +86,8 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def _extra_params(args: argparse.Namespace) -> dict:
-    params: dict = {}
+def extra_params(args: argparse.Namespace) -> dict[str, str | int | float]:
+    params: dict[str, str | int | float] = {}
     if args.voice is not None:
         params["voice"] = args.voice
     if args.text_prompt is not None:
@@ -133,7 +133,7 @@ async def run(args: argparse.Namespace) -> int:
                 if temperature is not None
                 else SamplingParams()
             ),
-            extra_params=_extra_params(args),
+            extra_params=extra_params(args),
             metadata={EXPLICIT_GENERATION_PARAMS_KEY: _explicit_fields(args)},
             output_modalities=["text", "audio"],
             stream=False,

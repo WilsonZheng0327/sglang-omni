@@ -31,6 +31,7 @@ from sglang_omni.proto.request import EXPLICIT_GENERATION_PARAMS_KEY, StagePaylo
 from sglang_omni.sampling.seed import derive_sampling_seed
 from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
+from sglang_omni.scheduling.types import RequestOutput
 
 SEED_NAMESPACE = "personaplex"
 # Note (wilsonzheng0327): The client fills these into every request, so a value equal
@@ -262,7 +263,7 @@ def apply_lm_result(data: SGLangARRequestData) -> StagePayload:
 
 
 def lm_stream_output_builder(
-    request_id: str, data: SGLangARRequestData, req_output
+    request_id: str, data: SGLangARRequestData, req_output: RequestOutput
 ) -> list[OutgoingMessage]:
     pending = data.talker_model_inputs.get("pending_frames")
     if not pending:

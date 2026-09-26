@@ -8,13 +8,15 @@ arrive: 1920 samples per 80 ms frame, no holdback.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import torch
 
 from sglang_omni.models.personaplex.architecture import SAMPLE_RATE
 from sglang_omni.models.personaplex.components.mimi import MimiCodec, MimiDecodeState
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.proto.request import StagePayload
-from sglang_omni.scheduling.message import OutgoingMessage
+from sglang_omni.scheduling.message import IncomingMessage, OutgoingMessage
 from sglang_omni.scheduling.streaming_simple_scheduler import StreamingSimpleScheduler
 from sglang_omni.utils.audio_payload import audio_waveform_payload
 
@@ -34,6 +36,10 @@ def trim_to_caller(waveform: torch.Tensor, num_samples: int) -> torch.Tensor:
     return waveform
 
 
+class AudioPayloadDecoder(Protocol):
+    def __call__(self, payload: StagePayload) -> StagePayload: ...
+
+
 class StreamState:
     def __init__(self, codec: MimiCodec) -> None:
         self.decode_state: MimiDecodeState = codec.init_decode_state()
@@ -42,26 +48,28 @@ class StreamState:
 
 
 class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
-    def __init__(self, codec: MimiCodec, *, compute_fn) -> None:
+    def __init__(self, codec: MimiCodec, *, compute_fn: AudioPayloadDecoder) -> None:
         super().__init__(compute_fn)
         self.codec = codec
         self.stream_states: dict[str, StreamState] = {}
 
-    def is_streaming_payload(self, payload) -> bool:
+    def is_streaming_payload(self, payload: StagePayload) -> bool:
         # Note (wilsonzheng0327): The LM streams every frame it produces, so a reply
         # with frames has chunks on the way whichever channel lands first; only an
         # empty reply is rendered whole.
         codes = PersonaPlexState.from_dict(payload.data).codes
         return codes is not None and codes.shape[0] > 0
 
-    def on_streaming_new_request(self, request_id: str, payload) -> None:
+    def on_streaming_new_request(self, request_id: str, payload: StagePayload) -> None:
         self.stream_states.setdefault(request_id, StreamState(self.codec))
 
     def clear_stream_state(self, request_id: str) -> None:
         self.stream_states.pop(request_id, None)
 
     @torch.inference_mode()
-    def on_stream_chunk(self, request_id: str, item) -> list[OutgoingMessage]:
+    def on_stream_chunk(
+        self, request_id: str, item: IncomingMessage
+    ) -> list[OutgoingMessage]:
         state = self.stream_states.setdefault(request_id, StreamState(self.codec))
         codes_FK = torch.as_tensor(
             item.data, dtype=torch.long, device=self.codec.device

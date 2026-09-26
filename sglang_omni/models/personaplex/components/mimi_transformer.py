@@ -59,7 +59,7 @@ class MimiAttention(nn.Module):
         max_period: float,
         *,
         write_chunk: int,
-    ):
+    ) -> None:
         super().__init__()
         self.num_heads = num_heads
         self.context = context
@@ -105,7 +105,9 @@ class MimiAttention(nn.Module):
         out = functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         return self.out_proj(rearrange(out, "b h t d -> b t (h d)"))
 
-    def write_ring(self, k, v, state: AttentionState) -> torch.Tensor:
+    def write_ring(
+        self, k: torch.Tensor, v: torch.Tensor, state: AttentionState
+    ) -> torch.Tensor:
         """Store this step in the ring and label every slot as the reference does.
 
         The slot about to be overwritten is labelled as a future position, so

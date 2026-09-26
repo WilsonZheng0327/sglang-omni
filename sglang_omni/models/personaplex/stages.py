@@ -36,6 +36,7 @@ from sglang_omni.models.personaplex.request_builders import stage_request_params
 from sglang_omni.models.weight_loader import resolve_model_path
 from sglang_omni.preprocessing.transcription import resolve_audio_source
 from sglang_omni.proto.request import StagePayload
+from sglang_omni.scheduling.omni_scheduler import OmniScheduler
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.utils.audio import load_audio
 from sglang_omni.utils.audio_payload import audio_waveform_payload
@@ -159,7 +160,7 @@ def create_lm_executor(
     context_length: int | None = None,
     server_args_overrides: dict[str, object] | None = None,
     **overrides: object,
-):
+) -> OmniScheduler:
     server_args_overrides = {**overrides, **(server_args_overrides or {})}
     # Note (wilsonzheng0327): The shim config is written before the engine reads its
     # overrides, so an engine context_length must reach the builder too.

@@ -11,7 +11,12 @@ one position later, a finished output frame streamed to the codec.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import torch
+from sglang.srt.managers.schedule_batch import ScheduleBatch
+from sglang.srt.managers.utils import GenerationBatchResult
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
 from sglang_omni.model_runner.base import ModelRunner
 from sglang_omni.model_runner.prefill_inputs import (
@@ -25,20 +30,32 @@ from sglang_omni.models.personaplex.architecture import (
 )
 from sglang_omni.models.personaplex.sampling import sample_token
 from sglang_omni.models.personaplex.timeline import Timeline, output_frame
+from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
+from sglang_omni.scheduling.types import SchedulerRequest
+
+
+class AudioTokenSampler(Protocol):
+    def __call__(self, logits: torch.Tensor) -> torch.Tensor: ...
 
 
 class PersonaPlexModelRunner(ModelRunner):
     def sample_before_post_prefill(
-        self, forward_batch, schedule_batch, requests
+        self,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
     ) -> bool:
         return True
 
     def sample_before_post_decode(
-        self, forward_batch, schedule_batch, requests
+        self,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
     ) -> bool:
         return True
 
-    def lookahead_eligible(self, batch) -> bool:
+    def lookahead_eligible(self, batch: ScheduleBatch) -> bool:
         # Note (wilsonzheng0327): The depformer must see this step's sampled text before
         # the next forward is prepared; a one-step lookahead would run it a step late.
         return False
@@ -48,10 +65,10 @@ class PersonaPlexModelRunner(ModelRunner):
         return self.model.fusion_buffer.device
 
     @staticmethod
-    def request_timeline(data) -> Timeline:
+    def request_timeline(data: SGLangARRequestData) -> Timeline:
         return data.talker_model_inputs["timeline"]
 
-    def rows_on_device(self, data) -> dict:
+    def rows_on_device(self, data: SGLangARRequestData) -> dict[str, torch.Tensor]:
         """Move the request's timeline tensors to the device once."""
         inputs = data.talker_model_inputs
         cached = inputs.get("device_rows")
@@ -66,7 +83,7 @@ class PersonaPlexModelRunner(ModelRunner):
             pass
         return cached
 
-    def prefill_rows(self, data) -> torch.Tensor:
+    def prefill_rows(self, data: SGLangARRequestData) -> torch.Tensor:
         timeline = self.request_timeline(data)
         model = self.model
         tokens = timeline.prefill_tokens.to(self.model_device)
@@ -87,7 +104,7 @@ class PersonaPlexModelRunner(ModelRunner):
         rows[known] = model.embed_rows(tokens[known]).to(dtype)
         return rows
 
-    def audio_sampler(self, data):
+    def audio_sampler(self, data: SGLangARRequestData) -> AudioTokenSampler:
         inputs = data.talker_model_inputs
         sampling = inputs["sampling"]
         generator = inputs.get("audio_generator")
@@ -100,7 +117,11 @@ class PersonaPlexModelRunner(ModelRunner):
         return lambda logits: sample_token(logits, sampling.audio, generator)
 
     def spell_frame(
-        self, index: int, request, text_token: torch.Tensor, forced: torch.Tensor
+        self,
+        index: int,
+        request: SchedulerRequest,
+        text_token: torch.Tensor,
+        forced: torch.Tensor,
     ) -> None:
         """Run the depformer for the position just predicted and record it."""
         data = request.data
@@ -124,7 +145,9 @@ class PersonaPlexModelRunner(ModelRunner):
             device=self.model_device,
         )
 
-    def generated_rows(self, data, generated: list[int]) -> torch.Tensor:
+    def generated_rows(
+        self, data: SGLangARRequestData, generated: list[int]
+    ) -> torch.Tensor:
         """Embed the positions already generated, replayed after a retract."""
         model = self.model
         timeline = self.request_timeline(data)
@@ -140,7 +163,12 @@ class PersonaPlexModelRunner(ModelRunner):
             rows[index, USER_STREAM_OFFSET:] = device_rows["user_rows"][start + index]
         return model.embed_rows(rows).to(model.fusion_buffer.dtype)
 
-    def before_prefill(self, forward_batch, schedule_batch, requests) -> None:
+    def before_prefill(
+        self,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
+    ) -> None:
         rows = []
         for request, req in zip(requests, schedule_batch.reqs, strict=True):
             data = request.data
@@ -171,7 +199,13 @@ class PersonaPlexModelRunner(ModelRunner):
             ),
         )
 
-    def post_prefill(self, result, forward_batch, schedule_batch, requests) -> None:
+    def post_prefill(
+        self,
+        result: GenerationBatchResult,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
+    ) -> None:
         sampled = result.next_token_ids
         for index, request in enumerate(requests):
             inputs = request.data.talker_model_inputs
@@ -179,7 +213,12 @@ class PersonaPlexModelRunner(ModelRunner):
             self.spell_frame(index, request, sampled[index], forced)
 
     def before_decode(
-        self, forward_batch, schedule_batch, requests, *, is_lookahead=False
+        self,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
+        *,
+        is_lookahead: bool = False,
     ) -> None:
         model = self.model
         rows = []
@@ -198,7 +237,13 @@ class PersonaPlexModelRunner(ModelRunner):
             model.fusion_buffer.dtype
         )
 
-    def post_decode(self, result, forward_batch, schedule_batch, requests) -> None:
+    def post_decode(
+        self,
+        result: GenerationBatchResult,
+        forward_batch: ForwardBatch,
+        schedule_batch: ScheduleBatch,
+        requests: list[SchedulerRequest],
+    ) -> None:
         sampled = result.next_token_ids
         free = self.free_codes()
         for index, request in enumerate(requests):

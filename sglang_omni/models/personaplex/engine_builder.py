@@ -8,7 +8,12 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Protocol
 
+import torch
+from sglang.srt.server_args import ServerArgs
+
+from sglang_omni.model_runner.model_worker import ModelWorker
 from sglang_omni.models.personaplex.architecture import MOSHI_WEIGHTS_NAME
 from sglang_omni.models.personaplex.hf_config import (
     DEFAULT_CONTEXT_LENGTH,
@@ -21,8 +26,28 @@ from sglang_omni.models.personaplex.request_builders import (
     build_lm_request,
     lm_stream_output_builder,
 )
+from sglang_omni.models.personaplex.sglang_model import PersonaPlexForCausalLM
 from sglang_omni.models.weight_loader import resolve_model_path
+from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.engine_factory import TtsEngineBuilder
+from sglang_omni.scheduling.message import OutgoingMessage
+from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
+from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
+from sglang_omni.scheduling.types import RequestOutput
+
+
+class LMRequestBuilder(Protocol):
+    def __call__(self, payload: StagePayload) -> SGLangARRequestData: ...
+
+
+class LMResultBuilder(Protocol):
+    def __call__(self, data: SGLangARRequestData) -> StagePayload: ...
+
+
+class LMStreamOutputBuilder(Protocol):
+    def __call__(
+        self, request_id: str, data: SGLangARRequestData, req_output: RequestOutput
+    ) -> list[OutgoingMessage]: ...
 
 
 def shim_checkpoint_dir(source: Path, *, context_length: int) -> Path:
@@ -61,11 +86,11 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
         else:
             pass
 
-    def resolve_checkpoint(self, model_path):
+    def resolve_checkpoint(self, model_path: str) -> str:
         source = Path(resolve_model_path(model_path))
         return str(shim_checkpoint_dir(source, context_length=self.context_length))
 
-    def generation_defaults(self, *, dtype):
+    def generation_defaults(self, *, dtype: str) -> dict[str, str | int | bool]:
         return {
             "disable_cuda_graph": True,
             "disable_overlap_schedule": True,
@@ -79,21 +104,38 @@ class PersonaPlexEngineBuilder(TtsEngineBuilder):
             "sampling_backend": "pytorch",
         }
 
-    def setup_model(self, *, model_worker, checkpoint_dir, device, gpu_id, server_args):
+    def setup_model(
+        self,
+        *,
+        model_worker: ModelWorker,
+        checkpoint_dir: str,
+        device: str | torch.device,
+        gpu_id: int,
+        server_args: ServerArgs,
+    ) -> None:
         """Nothing beyond SGLang's own load: the model owns its buffers."""
 
-    def make_model_runner(self, model_worker, output_proc):
+    def make_model_runner(
+        self,
+        model_worker: ModelWorker,
+        output_proc: SGLangOutputProcessor,
+    ) -> PersonaPlexModelRunner:
         return PersonaPlexModelRunner(model_worker, output_proc)
 
-    def make_adapters(self, model):
+    def make_adapters(self, model: PersonaPlexForCausalLM) -> tuple[
+        LMRequestBuilder,
+        LMResultBuilder,
+    ]:
         vocab_size = int(model.config.vocab_size)
 
-        def build(payload):
+        def build(payload: StagePayload) -> SGLangARRequestData:
             return build_lm_request(
                 payload, vocab_size=vocab_size, context_length=self.context_length
             )
 
         return build, apply_lm_result
 
-    def extra_scheduler_kwargs(self):
+    def extra_scheduler_kwargs(
+        self,
+    ) -> dict[str, LMStreamOutputBuilder]:
         return {"stream_output_builder": lm_stream_output_builder}

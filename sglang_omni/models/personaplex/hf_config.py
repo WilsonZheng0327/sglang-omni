@@ -16,7 +16,9 @@ PERSONAPLEX_ARCH = "PersonaPlexForCausalLM"
 DEFAULT_CONTEXT_LENGTH = 8192
 
 
-def build_backbone_config(*, context_length: int = DEFAULT_CONTEXT_LENGTH) -> dict:
+def build_backbone_config(
+    *, context_length: int = DEFAULT_CONTEXT_LENGTH
+) -> dict[str, str | int | float | bool | list[str]]:
     spec = TEMPORAL_TRANSFORMER
     return {
         "architectures": [PERSONAPLEX_ARCH],

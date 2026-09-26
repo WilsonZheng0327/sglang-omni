@@ -10,13 +10,17 @@ back.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 import torch
+from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.quantization.base_config import QuantizationConfig
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.models.llama import LlamaForCausalLM
 from sglang.srt.runtime_context import get_schedule
 from sglang.srt.utils import add_prefix
 from torch import nn
+from transformers import PretrainedConfig
 
 from sglang_omni.models.personaplex.architecture import (
     AUDIO_CARD,
@@ -31,7 +35,9 @@ from sglang_omni.models.personaplex.components.depformer import Depformer
 BACKBONE_LAYER_PREFIX = "transformer.layers."
 
 
-def backbone_weight(name: str, tensor: torch.Tensor):
+def backbone_weight(
+    name: str, tensor: torch.Tensor
+) -> Iterator[tuple[str, torch.Tensor]]:
     """Yield the Llama names for one temporal-transformer tensor."""
     index, _, tail = name[len(BACKBONE_LAYER_PREFIX) :].partition(".")
     base = f"model.layers.{index}."
@@ -58,7 +64,13 @@ def backbone_weight(name: str, tensor: torch.Tensor):
 
 
 class PersonaPlexForCausalLM(nn.Module):
-    def __init__(self, *, config, quant_config=None, prefix: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        config: PretrainedConfig,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
+    ) -> None:
         super().__init__()
         self.config = config
         self.temporal = TEMPORAL_TRANSFORMER
@@ -97,7 +109,14 @@ class PersonaPlexForCausalLM(nn.Module):
             summed = summed + self.audio_emb[k](rows_NK[:, 1 + k])
         return summed + self.text_emb(rows_NK[:, 0])
 
-    def forward(self, input_ids, positions, forward_batch, input_embeds=None, **_):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        forward_batch: ForwardBatch,
+        input_embeds: torch.Tensor | None = None,
+        **_,
+    ) -> LogitsProcessorOutput:
         if input_embeds is None:
             input_embeds = self.fusion_buffer[: input_ids.shape[0]]
         else:

@@ -24,12 +24,17 @@ from sglang_omni.models.personaplex.components.causal_conv import (
     ELU,
     CausalConv1d,
     CausalConvTranspose1d,
+    ConvState,
+    ConvTransposeState,
     StreamingModule,
 )
 from sglang_omni.models.personaplex.components.mimi_transformer import (
     MimiTransformer,
     TransformerState,
 )
+
+SEANetLayerState = ConvState | ConvTransposeState | None
+SEANetState = list[SEANetLayerState | list[SEANetLayerState]]
 
 
 class SEANetResnetBlock(StreamingModule):
@@ -53,10 +58,10 @@ class SEANetResnetBlock(StreamingModule):
             y = module(y)
         return x + y
 
-    def init_state(self) -> list:
+    def init_state(self) -> SEANetState:
         return stack_state(self.block)
 
-    def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
+    def step(self, x: torch.Tensor, state: SEANetState) -> torch.Tensor:
         y = x
         for module, module_state in zip(self.block, state, strict=True):
             y = module.step(y, module_state) if module_state is not None else module(y)
@@ -70,11 +75,13 @@ def run_stack(modules: nn.ModuleList, x: torch.Tensor) -> torch.Tensor:
     return x
 
 
-def stack_state(modules: nn.ModuleList) -> list:
+def stack_state(modules: nn.ModuleList) -> SEANetState:
     return [m.init_state() for m in modules]
 
 
-def step_stack(modules: nn.ModuleList, x: torch.Tensor, state: list) -> torch.Tensor:
+def step_stack(
+    modules: nn.ModuleList, x: torch.Tensor, state: SEANetState
+) -> torch.Tensor:
     for module, module_state in zip(modules, state, strict=True):
         x = module.step(x, module_state)
     return x
@@ -106,10 +113,10 @@ class SEANetEncoder(StreamingModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return run_stack(self.model, x)
 
-    def init_state(self) -> list:
+    def init_state(self) -> SEANetState:
         return stack_state(self.model)
 
-    def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
+    def step(self, x: torch.Tensor, state: SEANetState) -> torch.Tensor:
         return step_stack(self.model, x, state)
 
 
@@ -141,10 +148,10 @@ class SEANetDecoder(StreamingModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return run_stack(self.model, x)
 
-    def init_state(self) -> list:
+    def init_state(self) -> SEANetState:
         return stack_state(self.model)
 
-    def step(self, x: torch.Tensor, state: list) -> torch.Tensor:
+    def step(self, x: torch.Tensor, state: SEANetState) -> torch.Tensor:
         return step_stack(self.model, x, state)
 
 
@@ -238,16 +245,16 @@ class SplitResidualVectorQuantizer(nn.Module):
 
 @dataclass
 class MimiEncodeState:
-    encoder: list
+    encoder: SEANetState
     transformer: TransformerState
-    downsample: object
+    downsample: ConvState
 
 
 @dataclass
 class MimiDecodeState:
-    upsample: object
+    upsample: ConvTransposeState
     transformer: TransformerState
-    decoder: list
+    decoder: SEANetState
 
 
 class MimiCodec(nn.Module):
