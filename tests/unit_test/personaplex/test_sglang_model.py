@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Checkpoint tensors land on the right Llama and Moshi parameters, without a GPU."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -55,7 +56,7 @@ def fake_model() -> SimpleNamespace:
     loaded = SimpleNamespace(backbone=None, depformer=None)
     return SimpleNamespace(
         loaded=loaded,
-        temporal=TEMPORAL_TRANSFORMER,
+        temporal=replace(TEMPORAL_TRANSFORMER, num_layers=1),
         llm=SimpleNamespace(load_weights=lambda w: setattr(loaded, "backbone", w)),
         audio_emb=nn.ModuleList(
             nn.Embedding(AUDIO_CARD + 1, DIM) for _ in range(NUM_AUDIO_STREAMS)
@@ -73,6 +74,11 @@ def test_load_weights_routes_every_checkpoint_group():
     audio = {f"emb.{k}.weight": torch.randn(AUDIO_CARD + 1, DIM) for k in range(16)}
     weights = {
         "transformer.layers.0.self_attn.out_proj.weight": torch.zeros(DIM, DIM),
+        "transformer.layers.0.self_attn.in_proj_weight": torch.zeros(3 * DIM, DIM),
+        "transformer.layers.0.norm1.alpha": torch.ones(1, 1, DIM),
+        "transformer.layers.0.norm2.alpha": torch.ones(1, 1, DIM),
+        "transformer.layers.0.gating.linear_in.weight": torch.zeros(2 * DIM, DIM),
+        "transformer.layers.0.gating.linear_out.weight": torch.zeros(DIM, DIM),
         "out_norm.alpha": torch.ones(1, 1, DIM),
         "text_linear.weight": torch.randn(TEXT_CARD, DIM),
         "text_emb.weight": text_emb,
@@ -81,11 +87,34 @@ def test_load_weights_routes_every_checkpoint_group():
         **audio,
     }
 
+    for missing in (
+        "transformer.layers.0.self_attn.in_proj_weight",
+        "transformer.layers.0.gating.linear_out.weight",
+        "out_norm.alpha",
+        "text_linear.weight",
+        "text_emb.weight",
+    ):
+        incomplete = {
+            name: tensor for name, tensor in weights.items() if name != missing
+        }
+        rejected = fake_model()
+        with pytest.raises(ValueError, match="missing PersonaPlex backbone weights"):
+            PersonaPlexForCausalLM.load_weights(rejected, incomplete.items())
+        assert rejected.loaded.backbone is None
+
     PersonaPlexForCausalLM.load_weights(model, weights.items())
 
     backbone = dict(model.loaded.backbone)
     assert set(backbone) == {
         "model.layers.0.self_attn.o_proj.weight",
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.0.self_attn.k_proj.weight",
+        "model.layers.0.self_attn.v_proj.weight",
+        "model.layers.0.input_layernorm.weight",
+        "model.layers.0.post_attention_layernorm.weight",
+        "model.layers.0.mlp.gate_proj.weight",
+        "model.layers.0.mlp.up_proj.weight",
+        "model.layers.0.mlp.down_proj.weight",
         "model.norm.weight",
         "lm_head.weight",
         "model.embed_tokens.weight",
