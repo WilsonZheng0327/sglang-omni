@@ -63,7 +63,25 @@ curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -
 | `seed` | Makes both draws reproducible (a child seed each for text and audio). |
 | `max_new_tokens` | Ignored; the frame count is fixed by the input length. |
 
-Use `stage_params.lm` for exact text overrides, including `temperature: 1.0` and `top_k: -1`. The shared client still fills these values into `stage_sampling`, where PersonaPlex treats them as defaults rather than overrides. A non-null `stage_sampling.lm.seed` takes precedence over `stage_params.lm.seed` and the global seed, and seeds both text and audio draws.
+### Explicit stage sampling
+
+HTTP chat and rollout requests preserve which fields were provided in
+`stage_sampling.lm`. For example, `{"seed": 7}` keeps the PersonaPlex text
+defaults (temperature 0.7, top-k 25), while
+`{"temperature": 1.0, "top_k": -1}` explicitly selects temperature 1.0 and
+disables top-k filtering. In-process stage `SamplingParams` objects are complete configurations:
+all serialized fields are explicit. Thus `SamplingParams(seed=7)` in
+`stage_sampling.lm` selects temperature 1.0 and top-k -1 as well as seed 7.
+To keep PersonaPlex text defaults, omit `stage_sampling` and set the seed in
+the top-level `sampling=SamplingParams(seed=7)` instead. Top-level client
+filler handling is unchanged.
+
+Text sampling uses `stage_sampling.lm`, then `stage_params.lm`, then top-level
+request values. Stage sampling also takes precedence for `seed`.
+`top_p`, `min_p`, and `repetition_penalty` apply to the text sampler only;
+`audio_temperature` and `audio_top_k` continue to control the audio sampler.
+The fixed caller-frame budget still determines the number of generated frames.
+
 
 ## Known limitations
 

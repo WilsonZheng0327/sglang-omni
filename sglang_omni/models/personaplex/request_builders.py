@@ -27,7 +27,11 @@ from sglang_omni.models.personaplex.timeline import (
     build_prompt_frames,
     build_timeline,
 )
-from sglang_omni.proto.request import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
+from sglang_omni.proto.request import (
+    EXPLICIT_GENERATION_PARAMS_KEY,
+    EXPLICIT_STAGE_SAMPLING_PARAMS_KEY,
+    StagePayload,
+)
 from sglang_omni.sampling.seed import derive_sampling_seed
 from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
@@ -36,7 +40,13 @@ from sglang_omni.scheduling.types import RequestOutput
 SEED_NAMESPACE = "personaplex"
 # Note (wilsonzheng0327): The client fills these into every request, so a value equal
 # to one of them only counts when the caller listed the field as explicit.
-CLIENT_FILLER_VALUES = {"temperature": 1.0, "top_k": -1}
+CLIENT_FILLER_VALUES = {
+    "temperature": 1.0,
+    "top_k": -1,
+    "top_p": 1.0,
+    "min_p": 0.0,
+    "repetition_penalty": 1.0,
+}
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,9 @@ class RequestSampling:
     text_top_k: int
     audio: AudioSampling
     seed: int | None
+    top_p: float
+    min_p: float
+    repetition_penalty: float
 
     @property
     def text_seed(self) -> int | None:
@@ -99,15 +112,10 @@ def chosen_text_param(sources: list[tuple[dict, bool]], key: str, default, cast)
     return default
 
 
-def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
-    """temperature/top_k steer the text, audio_temperature /
-    audio_top_k the codes; seed makes both draws reproducible.
-
-    Text values equal to the client's filler defaults fall back to the
-    reference defaults unless explicit_fields names them or they come from
-    stage_params, which the client never fills.
-    """
-    stage_sampling = (params.get("stage_sampling") or {}).get(LM_STAGE) or {}
+def resolve_sampling(
+    params: dict, explicit_fields=(), *, stage_sampling: dict
+) -> RequestSampling:
+    """Resolve selected stage values before stage overrides and top-level values."""
     lm_overrides = stage_param_overrides(params, LM_STAGE)
     lm_params = {**params, **lm_overrides}
     explicit = set(explicit_fields)
@@ -123,7 +131,7 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
 
     def text(key: str, default, cast):
         sources = [
-            (stage_sampling, False),
+            (stage_sampling, True),
             (lm_overrides, True),
             (params, key in explicit),
         ]
@@ -139,6 +147,9 @@ def resolve_sampling(params: dict, explicit_fields=()) -> RequestSampling:
             top_k=param_or_default(lm_params, "audio_top_k", DEFAULT_AUDIO_TOP_K, int),
         ),
         seed=None if seed is None else int(seed),
+        top_p=text("top_p", 1.0, float),
+        min_p=text("min_p", 0.0, float),
+        repetition_penalty=text("repetition_penalty", 1.0, float),
     )
 
 
@@ -173,8 +184,18 @@ def build_lm_request(
     state = PersonaPlexState.from_dict(payload.data)
     timeline = timeline_from_state(state)
     metadata = payload.request.metadata or {}
+    params = payload.request.params
+    if "stage_sampling" in params and LM_STAGE in params["stage_sampling"]:
+        stage_sampling = {
+            key: params["stage_sampling"][LM_STAGE][key]
+            for key in metadata[EXPLICIT_STAGE_SAMPLING_PARAMS_KEY][LM_STAGE]
+        }
+    else:
+        stage_sampling = {}
     sampling = resolve_sampling(
-        payload.request.params, metadata.get(EXPLICIT_GENERATION_PARAMS_KEY) or ()
+        params,
+        metadata.get(EXPLICIT_GENERATION_PARAMS_KEY) or (),
+        stage_sampling=stage_sampling,
     )
     if timeline.num_frames < 1:
         raise ValueError("PersonaPlex needs at least one 80 ms frame of caller audio")
@@ -196,6 +217,9 @@ def build_lm_request(
         max_new_tokens=timeline.num_frames,
         temperature=sampling.text_temperature,
         top_k=sampling.text_top_k,
+        top_p=sampling.top_p,
+        min_p=sampling.min_p,
+        repetition_penalty=sampling.repetition_penalty,
         ignore_eos=True,
     )
     sampling_params.normalize(tokenizer=None)
