@@ -38,9 +38,13 @@ from sglang_omni.preprocessing.transcription import resolve_audio_source
 from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.omni_scheduler import OmniScheduler
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
+from sglang_omni.scheduling.stage_cache import StageOutputCache, value_size_bytes
 from sglang_omni.utils.audio import load_audio
 from sglang_omni.utils.audio_payload import audio_waveform_payload
 from sglang_omni.utils.device import resolve_concrete_device
+
+# note (jli2786): Client-selected voice paths can otherwise grow the cache without bound.
+VOICE_PROMPT_CACHE_MAX_BYTES = 512 * 1024**2
 
 
 def load_channels(source: str | bytes, *, source_name: str) -> np.ndarray:
@@ -71,7 +75,14 @@ def caller_audio_source(payload: StagePayload) -> str | bytes:
 def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
     model_dir = Path(resolve_model_path(model_path))
     tokenizer = load_text_tokenizer(model_dir)
-    voice_cache: dict[Path, VoicePrompt] = {}
+
+    def voice_prompt_size(prompt: VoicePrompt) -> int:
+        return value_size_bytes((prompt.embeddings, prompt.tail_codes, prompt.waveform))
+
+    voice_prompt_cache = StageOutputCache(
+        max_bytes=VOICE_PROMPT_CACHE_MAX_BYTES,
+        size_fn=voice_prompt_size,
+    )
 
     def preprocess(payload: StagePayload) -> StagePayload:
         params = stage_request_params(payload.request.params, PREPROCESSING_STAGE)
@@ -93,15 +104,15 @@ def create_preprocessing_executor(model_path: str, **_) -> SimpleScheduler:
         voice = params.get("voice", DEFAULT_VOICE)
         if voice:
             path = resolve_voice_path(model_dir, str(voice))
-            prompt = voice_cache.get(path)
+            prompt = voice_prompt_cache.get(str(path))
             if prompt is None:
                 prompt = load_voice_prompt(
                     path,
-                    load_audio=lambda p: load_channels(
-                        p, source_name="PersonaPlex voice"
+                    load_audio=lambda source: load_channels(
+                        source, source_name="PersonaPlex voice"
                     ),
                 )
-                voice_cache[path] = prompt
+                voice_prompt_cache.put(str(path), prompt)
             else:
                 pass
             state.voice_frames = prompt.frames
