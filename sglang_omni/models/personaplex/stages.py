@@ -35,7 +35,7 @@ from sglang_omni.models.personaplex.prompts import (
 from sglang_omni.models.personaplex.request_builders import stage_request_params
 from sglang_omni.models.weight_loader import resolve_model_path
 from sglang_omni.preprocessing.transcription import resolve_audio_source
-from sglang_omni.proto import StagePayload
+from sglang_omni.proto.request import StagePayload
 from sglang_omni.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni.utils.audio import load_audio
 from sglang_omni.utils.audio_payload import audio_waveform_payload

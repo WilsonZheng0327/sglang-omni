@@ -5,7 +5,7 @@ from typing import ClassVar
 
 from pydantic import Field
 
-from sglang_omni.config import (
+from sglang_omni.config.schema import (
     EngineArgs,
     EngineStageConfig,
     FactoryArgs,

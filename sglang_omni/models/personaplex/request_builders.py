@@ -27,7 +27,7 @@ from sglang_omni.models.personaplex.timeline import (
     build_prompt_frames,
     build_timeline,
 )
-from sglang_omni.proto import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
+from sglang_omni.proto.request import EXPLICIT_GENERATION_PARAMS_KEY, StagePayload
 from sglang_omni.sampling.seed import derive_sampling_seed
 from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
