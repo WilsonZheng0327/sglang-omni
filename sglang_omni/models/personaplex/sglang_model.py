@@ -135,7 +135,21 @@ class PersonaPlexForCausalLM(nn.Module):
         backbone: list[tuple[str, torch.Tensor]] = []
         depformer: dict[str, torch.Tensor] = {}
         embeddings: dict[str, torch.Tensor] = {}
+        required_weights = {"out_norm.alpha", "text_linear.weight", "text_emb.weight"}
+        required_weights.update(
+            f"{BACKBONE_LAYER_PREFIX}{layer}.{suffix}"
+            for layer in range(self.temporal.num_layers)
+            for suffix in (
+                "self_attn.in_proj_weight",
+                "self_attn.out_proj.weight",
+                "norm1.alpha",
+                "norm2.alpha",
+                "gating.linear_in.weight",
+                "gating.linear_out.weight",
+            )
+        )
         for name, tensor in weights:
+            required_weights.discard(name)
             if name.startswith(BACKBONE_LAYER_PREFIX):
                 backbone.extend(backbone_weight(name, tensor))
             elif name == "out_norm.alpha":
@@ -153,6 +167,12 @@ class PersonaPlexForCausalLM(nn.Module):
                 depformer[name] = tensor
             else:
                 raise KeyError(f"unexpected PersonaPlex tensor {name!r}")
+        if required_weights:
+            raise ValueError(
+                f"missing PersonaPlex backbone weights: {sorted(required_weights)}"
+            )
+        else:
+            pass
         self.llm.load_weights(backbone)
         missing, unexpected = self.audio_emb.load_state_dict(
             {
