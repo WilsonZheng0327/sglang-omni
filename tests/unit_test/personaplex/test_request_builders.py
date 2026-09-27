@@ -419,3 +419,84 @@ def test_rollout_stage_token_limit_alias_records_canonical_field() -> None:
         make_payload(2, lowered.params, lowered.metadata), vocab_size=32000
     )
     assert data.max_new_tokens == 2
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("audio_temperature", -1),
+        ("audio_temperature", float("inf")),
+        ("audio_temperature", float("nan")),
+        ("audio_temperature", "0.5"),
+        ("audio_temperature", True),
+        ("audio_top_k", -5),
+        ("audio_top_k", 2.5),
+        ("audio_top_k", True),
+        ("seed", 1.9),
+        ("seed", "abc"),
+        ("seed", True),
+        ("stop", ["hello"]),
+        ("stop_token_ids", [3]),
+    ],
+)
+@pytest.mark.parametrize("scope", ["top_level", "stage_params", "stage_sampling"])
+def test_invalid_audio_seed_or_stop_is_a_bad_request(
+    key: str,
+    value: float | int | str | list[str] | list[int],
+    scope: Literal["top_level", "stage_params", "stage_sampling"],
+) -> None:
+    with pytest.raises(ValueError) as error:
+        resolve_sampling(
+            {key: value} if scope == "top_level" else {scope: {"lm": {key: value}}},
+            stage_sampling={key: value} if scope == "stage_sampling" else {},
+        )
+    assert is_bad_request_error(error.value)
+    assert str(error.value).startswith(f"PersonaPlex {key} must be")
+
+
+def test_valid_sampling_boundaries() -> None:
+    sampling = resolve_sampling(
+        {
+            "stage_params": {
+                "lm": {
+                    "temperature": 0.0,
+                    "audio_temperature": 0.0,
+                    "top_k": -1,
+                    "audio_top_k": 0,
+                    "seed": 0,
+                }
+            }
+        },
+        stage_sampling={},
+    )
+    assert sampling.text_top_k == -1 and sampling.audio.top_k == 0
+    assert sampling.audio.greedy and sampling.seed == 0
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [("temperature", -0.1), ("temperature", float("nan")), ("top_k", -2), ("top_k", 0)],
+)
+@pytest.mark.parametrize("scope", ["top_level", "stage_params", "stage_sampling"])
+def test_invalid_text_sampling_is_rejected_by_native_verification(
+    key: str,
+    value: float | int,
+    scope: Literal["top_level", "stage_params", "stage_sampling"],
+) -> None:
+    params = {key: value} if scope == "top_level" else {scope: {"lm": {key: value}}}
+    with pytest.raises(
+        ValueError, match="PersonaPlex sampling parameters must be valid:"
+    ) as error:
+        build_lm_request(make_payload(2, params), vocab_size=32000)
+    assert is_bad_request_error(error.value)
+
+
+def test_overridden_text_value_is_not_validated() -> None:
+    data = build_lm_request(
+        make_payload(
+            2,
+            {"temperature": -1, "stage_params": {"lm": {"temperature": 0.7}}},
+        ),
+        vocab_size=32000,
+    )
+    assert data.req.sampling_params.temperature == 0.7
