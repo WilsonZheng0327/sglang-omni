@@ -82,16 +82,25 @@ class PersonaPlexModelRunner(ModelRunner):
         return data.talker_model_inputs["timeline"]
 
     def rows_on_device(self, data: SGLangARRequestData) -> dict[str, torch.Tensor]:
-        """Move the request's timeline tensors to the device once."""
+        """Move the request's timeline tensors to the device once; user rows a
+        call's later units append are copied as they arrive."""
         inputs = data.talker_model_inputs
+        timeline = self.request_timeline(data)
         cached = inputs.get("device_rows")
         if cached is None:
-            timeline = self.request_timeline(data)
             cached = {
                 "user_rows": timeline.user_rows.to(self.model_device),
                 "agent_row": timeline.agent_row_before_start.to(self.model_device),
             }
             inputs["device_rows"] = cached
+        elif cached["user_rows"].shape[0] < timeline.user_rows.shape[0]:
+            num_copied = cached["user_rows"].shape[0]
+            cached["user_rows"] = torch.cat(
+                [
+                    cached["user_rows"],
+                    timeline.user_rows[num_copied:].to(self.model_device),
+                ]
+            )
         else:
             pass
         return cached
