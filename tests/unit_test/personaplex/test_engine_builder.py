@@ -22,9 +22,21 @@ def write_checkpoint(root):
     return root
 
 
-def test_shim_links_only_the_lm_weights(tmp_path):
+@pytest.mark.parametrize("context_length", [None, 2048])
+def test_builder_writes_backbone_config_and_links_only_lm_weights(
+    tmp_path: Path, context_length: int | None
+) -> None:
     source = write_checkpoint(tmp_path / "checkpoint")
-    shim = shim_checkpoint_dir(source, context_length=4096)
+    builder = (
+        PersonaPlexEngineBuilder()
+        if context_length is None
+        else PersonaPlexEngineBuilder(context_length=context_length)
+    )
+    expected_context = (
+        DEFAULT_CONTEXT_LENGTH if context_length is None else context_length
+    )
+    assert builder.context_length == expected_context
+    shim = Path(builder.resolve_checkpoint(str(source)))
     try:
         assert sorted(p.name for p in shim.iterdir()) == [
             "config.json",
@@ -35,7 +47,12 @@ def test_shim_links_only_the_lm_weights(tmp_path):
         assert weights.resolve() == (source / "model.safetensors").resolve()
         config = json.loads((shim / "config.json").read_text())
         assert config["architectures"] == ["PersonaPlexForCausalLM"]
-        assert config["max_position_embeddings"] == 4096
+        assert config["max_position_embeddings"] == expected_context
+        assert config["model_type"] == "llama"
+        assert config["rope_is_neox_style"] is False
+        assert config["rms_norm_eps"] == 1e-8
+        assert config["intermediate_size"] == 11264
+        assert config["vocab_size"] == 32000
     finally:
         shutil.rmtree(shim, ignore_errors=True)
 
@@ -43,17 +60,6 @@ def test_shim_links_only_the_lm_weights(tmp_path):
 def test_shim_requires_the_lm_weights(tmp_path):
     with pytest.raises(FileNotFoundError, match="LM weights missing"):
         shim_checkpoint_dir(tmp_path, context_length=4096)
-
-
-def test_builder_context_length_reaches_the_shim(tmp_path):
-    assert PersonaPlexEngineBuilder().context_length == DEFAULT_CONTEXT_LENGTH
-    builder = PersonaPlexEngineBuilder(context_length=2048)
-    shim = Path(builder.resolve_checkpoint(str(write_checkpoint(tmp_path))))
-    try:
-        config = json.loads((shim / "config.json").read_text())
-        assert config["max_position_embeddings"] == 2048
-    finally:
-        shutil.rmtree(shim, ignore_errors=True)
 
 
 def test_generation_defaults_keep_the_runner_assumptions():

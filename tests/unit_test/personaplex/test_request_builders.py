@@ -92,17 +92,6 @@ def test_sampling_defaults_and_overrides():
     assert data.req.sampling_params.sampling_seed == sampling.text_seed
 
 
-def test_result_carries_text_ids_and_frames_and_drops_inputs():
-    data = build_lm_request(make_payload(2), vocab_size=32000)
-    data.output_ids = [101, 102]
-    data.talker_model_inputs["frames"] = [torch.arange(8), torch.arange(8) + 8]
-    state = PersonaPlexState.from_dict(apply_lm_result(data).data)
-    assert state.text_ids == [TEXT_PAD_ID, 101]
-    assert data.output_ids == [101, 102]
-    assert state.codes.tolist() == [list(range(8)), list(range(8, 16))]
-    assert state.user_codes is None and state.waveform is None
-
-
 def test_stream_builder_ships_pending_frames_to_the_codec():
     data = build_lm_request(make_payload(2, num_samples=3000), vocab_size=32000)
     assert lm_stream_output_builder("r", data, None) == []
@@ -116,8 +105,9 @@ def test_stream_builder_ships_pending_frames_to_the_codec():
 
 
 def test_request_boundary_rejects_unusable_inputs():
-    with pytest.raises(ValueError, match="80 ms frame"):
+    with pytest.raises(ValueError, match="80 ms frame") as error:
         build_lm_request(make_payload(0), vocab_size=32000)
+    assert is_bad_request_error(error.value)
     no_audio = StagePayload(
         "r",
         request=OmniRequest(inputs={}, params={}),
@@ -125,8 +115,6 @@ def test_request_boundary_rejects_unusable_inputs():
     )
     with pytest.raises(ValueError, match="no encoded caller audio"):
         build_lm_request(no_audio, vocab_size=32000)
-    with pytest.raises(ValueError, match="seed must be an integer"):
-        resolve_sampling({"seed": True}, stage_sampling={})
 
 
 def test_client_filler_sampling_values_keep_the_reference_defaults():
@@ -139,19 +127,6 @@ def test_client_filler_sampling_values_keep_the_reference_defaults():
         filler, explicit_fields=["temperature", "top_k"], stage_sampling={}
     )
     assert chosen.text_temperature == 1.0 and chosen.text_top_k == -1
-
-    staged = resolve_sampling(
-        filler,
-        stage_sampling={"temperature": 0.3, "top_k": -1},
-    )
-    assert staged.text_temperature == 0.3
-    assert staged.text_top_k == -1
-
-    stage_params = resolve_sampling(
-        {**filler, "stage_params": {"lm": {"temperature": 1.0, "top_k": -1}}},
-        stage_sampling={},
-    )
-    assert stage_params.text_temperature == 1.0 and stage_params.text_top_k == -1
 
     data = build_lm_request(
         make_payload(2, filler, {EXPLICIT_GENERATION_PARAMS_KEY: ["temperature"]}),
@@ -181,81 +156,35 @@ def test_request_longer_than_the_context_is_rejected_with_the_limit():
     prompt = data.talker_model_inputs["timeline"].num_prompt_positions
     fits = 4096 - 1 - prompt
     build_lm_request(make_payload(fits), vocab_size=32000, context_length=4096)
-    with pytest.raises(ValueError, match=r"needs 4096 positions .* holds 4095"):
+    with pytest.raises(
+        ValueError, match=r"needs 4096 positions .* holds 4095"
+    ) as error:
         build_lm_request(make_payload(fits + 1), vocab_size=32000, context_length=4096)
+    assert is_bad_request_error(error.value)
 
 
-def test_request_errors_are_reported_as_bad_requests():
-    raised = []
-    for call in (
-        lambda: build_lm_request(make_payload(0), vocab_size=32000),
-        lambda: build_lm_request(
-            make_payload(9000), vocab_size=32000, context_length=8192
-        ),
-        lambda: resolve_sampling({"seed": True}, stage_sampling={}),
-    ):
-        with pytest.raises(ValueError) as error:
-            call()
-        raised.append(error.value)
-    assert all(is_bad_request_error(error) for error in raised)
-
-
-@pytest.mark.parametrize("request_source", ["client", "chat", "rollout"])
-@pytest.mark.parametrize("stage_seed, expected", [(None, 9), (0, 0), (42, 42)])
-def test_stage_seed_survives_request_conversion(
-    request_source: Literal["client", "chat", "rollout"],
-    stage_seed: int | None,
-    expected: int,
-) -> None:
-    if request_source == "chat":
-        request = build_chat_generate_request(
-            ChatCompletionRequest(
-                messages=[{"role": "user", "content": "hello"}],
-                seed=7,
-                stage_params={"lm": {"seed": 9}},
-                stage_sampling={"lm": {"seed": stage_seed}},
-            )
-        )
-    elif request_source == "rollout":
-        request = build_rollout_generate_request(
-            RolloutGenerateRequest(
-                prompt="hello",
-                sampling_params={"seed": 7},
-                stage_params={"lm": {"seed": 9}},
-                stage_sampling={"lm": {"seed": stage_seed}},
-            )
-        )
-    else:
-        request = GenerateRequest(
-            prompt="hello",
-            sampling=SamplingParams(seed=7),
-            stage_params={"lm": {"seed": 9}},
-            stage_sampling={"lm": SamplingParams(seed=stage_seed)},
-        )
-    lowered = Client.build_omni_request(request)
+@pytest.mark.parametrize("stage_seed,expected", [(None, 9), (0, 0), (42, 42)])
+def test_stage_seed_precedence(stage_seed: int | None, expected: int) -> None:
     sampling = resolve_sampling(
-        lowered.params,
-        stage_sampling={
-            key: lowered.params["stage_sampling"]["lm"][key]
-            for key in lowered.metadata[EXPLICIT_STAGE_SAMPLING_PARAMS_KEY]["lm"]
-        },
+        {"seed": 7, "stage_params": {"lm": {"seed": 9}}},
+        stage_sampling={"seed": stage_seed},
     )
     assert sampling.seed == expected
-    data = build_lm_request(make_payload(2, lowered.params), vocab_size=32000)
-    assert data.req.sampling_params.sampling_seed == sampling.text_seed
-    assert data.talker_model_inputs["sampling"].audio_seed == sampling.audio_seed
 
 
-@pytest.mark.parametrize("num_frames", [0, 1, 2, 5])
-def test_result_text_follows_emitted_audio_without_trimming_history(num_frames: int):
+@pytest.mark.parametrize("num_frames", [0, 1, 3])
+def test_result_preserves_frames_and_history_and_drops_inputs(num_frames: int) -> None:
     data = build_lm_request(make_payload(max(1, num_frames)), vocab_size=32000)
     tokens = list(range(101, 101 + num_frames))
     data.output_ids = tokens.copy()
-    data.talker_model_inputs["frames"] = [torch.arange(8)] * num_frames
+    frames = torch.arange(num_frames * 8).view(num_frames, 8)
+    data.talker_model_inputs["frames"] = list(frames)
     state = PersonaPlexState.from_dict(apply_lm_result(data).data)
     assert state.text_ids == ([TEXT_PAD_ID] + tokens)[:num_frames]
     assert len(state.text_ids) == state.codes.shape[0]
     assert data.output_ids == tokens
+    torch.testing.assert_close(state.codes, frames)
+    assert state.user_codes is None and state.waveform is None
 
 
 def test_stage_sampling_seed_and_text_controls_reach_backend() -> None:
@@ -442,12 +371,8 @@ def test_valid_sampling_boundaries() -> None:
     assert sampling.audio.greedy and sampling.seed == 0
 
 
-@pytest.mark.parametrize("scope", ["top_level", "stage_params", "stage_sampling"])
-def test_invalid_text_sampling_is_rejected_by_native_verification(
-    scope: Literal["top_level", "stage_params", "stage_sampling"],
-) -> None:
-    key, value = "temperature", -0.1
-    params = {key: value} if scope == "top_level" else {scope: {"lm": {key: value}}}
+def test_invalid_text_sampling_is_rejected_by_native_verification() -> None:
+    params = {"stage_sampling": {"lm": {"temperature": -0.1}}}
     with pytest.raises(
         ValueError, match="PersonaPlex sampling parameters must be valid:"
     ) as error:

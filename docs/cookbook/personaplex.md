@@ -93,75 +93,13 @@ The fixed caller-frame budget still determines the number of generated frames.
 
 `tests/unit_test/personaplex/` runs on CPU without weights: the delayed timeline, chunked Mimi against whole-sequence Mimi, the depformer, checkpoint weight routing, the model-runner hooks, the streaming codec stage, the checkpoint shim, preprocessing and voice unpacking, and request lowering.
 
-`tests/test_model/test_personaplex_parity.py` (marker `accelerator`, one GPU) recreates the greedy parity numbers: it runs the port and the reference's `moshi.offline --greedy` on the reference checkout's `assets/test` recordings (`input_assistant.wav` with `NATF2`, `input_service.wav` with `NATM1` and the service prompt) and compares the reply audio frame by frame. Because the reference is not deterministic past its first near-tie, each case first requires both replies to have exactly the input sample count, including the partial final frame, then asserts at least 100 leading identical frames and matching text up to the first divergence; two more tests check that the port is identical across reruns and that `seed` makes sampling reproducible. The measured frame counts and texts are printed (`-s`). The reference pins an older torch, so it runs from its own interpreter:
-
 ```bash
-export PERSONAPLEX_REFERENCE_SOURCE=~/personaplex
-export PERSONAPLEX_REFERENCE_REVISION=3428dfd95309a7f3c84fd93259ded0f810d1ff91
-export PERSONAPLEX_REFERENCE_PYTHON=~/personaplex/.venv/bin/python
-# Use an immutable snapshot, replacing the placeholder with its full commit SHA.
-export PERSONAPLEX_PARITY_CHECKPOINT="nvidia/personaplex-7b-v1@<full-checkpoint-commit>"
-export PERSONAPLEX_REFERENCE_DIR=~/.cache/personaplex-parity
-pytest tests/test_model/test_personaplex_parity.py -s --junitxml=personaplex-parity.xml
+pytest tests/unit_test/personaplex/ -q
 ```
 
-`PERSONAPLEX_REFERENCE_SOURCE` is a clean [NVIDIA/personaplex](https://github.com/NVIDIA/personaplex) checkout at `PERSONAPLEX_REFERENCE_REVISION`. The reference subprocess imports `moshi/` from that checkout using its own interpreter. The revision above is the reference used for the boundary checks, not a claim about the version used for earlier reported measurements.
-
-`PERSONAPLEX_PARITY_CHECKPOINT` accepts `repo@<full-commit-SHA>` or a local checkpoint directory. Both implementations receive the same local weights, tokenizer and voice file. `PERSONAPLEX_PARITY_STAGE_ARGS` configures the port (for example `--lm.engine.mem_fraction_static 0.5` on a 48 GB card); `PERSONAPLEX_PARITY_ATOL` is the per-sample tolerance (default 1e-4). `PERSONAPLEX_REFERENCE_REPO` only supplies the reference CLI's otherwise-unused config download; the weight paths are explicit.
-
-Each reference cache contains `output.wav`, `output.json`, `manifest.json` and a log. The manifest records the reference revision, checkpoint/input/voice hashes, prompt, seed, command, Python, torch, CUDA and GPU. Reuse requires matching inputs and output hashes; stale or unversioned outputs are regenerated when the reference interpreter is available, otherwise the test fails with regeneration instructions. A valid cache can be used without the reference interpreter. To remeasure reference nondeterminism or a different runtime/GPU, use a fresh cache directory.
-
-The short parity cases measure a matching prefix, not full-recording numerical equality or semantic quality. Complete audio agreement also requires complete text agreement. Keep the manifest, pytest output and JUnit report with any reported numbers.
-
-`tests/test_model/test_personaplex_components.py` (marker `accelerator`, one GPU) checks the components on the public Moshi base, [kyutai/moshiko-pytorch-bf16](https://huggingface.co/kyutai/moshiko-pytorch-bf16), which shares Mimi and every dimension: Mimi encode and decode (whole and chunked, against the reference's streaming path, which is what it serves with), the summed input embeddings, and the depformer's teacher-forced logits for one frame in float32 and bf16, with and without the reference's ring-cache behaviour at the last step. TF32 is off on both sides, as in the reference's own tests. The reference side is `tests/test_model/personaplex_reference_dump.py`, which runs under the reference interpreter and writes one safetensors file; the test creates it when `PERSONAPLEX_REFERENCE_DUMP` does not exist yet:
-
-```bash
-# Reuse the reference checkout, revision and interpreter set above.
-export PERSONAPLEX_MOSHI_BASE="kyutai/moshiko-pytorch-bf16@<full-checkpoint-commit>"
-export PERSONAPLEX_REFERENCE_DUMP=~/.cache/personaplex-parity/moshi_base_reference.safetensors
-pytest tests/test_model/test_personaplex_components.py -s --junitxml=personaplex-components.xml
-```
-
-The component dump uses the same cache checks, including the dump script hash, frame count, batch size and seed, in a sibling `.manifest.json` file. A manually produced dump without that manifest must be regenerated through the fixture.
-
-### Coverage of reported results
-
-| Result | Reproduction coverage |
-|---|---|
-| Assistant/service greedy prefixes | `test_greedy_matches_reference`; also checks full reply length. |
-| Same-seed and greedy reruns | `test_seed_reproducibility`, `test_port_is_deterministic`. Cross-GPU equality still requires separate runs and saved outputs. |
-| Mimi codes/decode, embeddings, depformer logits | `test_personaplex_components.py`; covers the base checkpoint and the documented step-7 ring difference. |
-| Window fill/wrap and text/audio alignment | CPU tests in `test_sglang_model.py`, `test_request_builders.py`, and `test_model_runner.py`; these do not establish long-audio quality. |
-| Five-minute per-round parity counts | Not covered by the short parity cases; needs a separate reference comparison with the exact repeated input and saved per-round results. |
-| 704-second completion | Manual length check below; listening-based coherence is not an automated assertion. |
-| HTTP versus offline audio | The HTTP example above exercises serving; numerical equality still needs decoded PCM and text compared against the same greedy offline input and options. |
-| Recorded voice, base-model end-to-end, packaged voice versus WAV | Separate measurements are still needed with the exact voice assets and hashes; the component tests do not reproduce these claims. |
-
-The following manual smoke test crosses the window boundary and the default request-length limit. It verifies completion length, not the historical per-round parity counts:
-
-```bash
-python - "$PERSONAPLEX_REFERENCE_SOURCE/assets/test/input_assistant.wav" <<'PYTHON'
-import sys
-import numpy as np
-import soundfile as sf
-waveform, rate = sf.read(sys.argv[1], always_2d=True)
-for seconds in (300, 704):
-    sf.write(f"caller-{seconds}.wav", np.resize(waveform[:, 0], seconds * rate), rate)
-PYTHON
-# CHECKPOINT_DIR is the resolved local snapshot used by the parity tests.
-for seconds in 300 704; do
-  python examples/run_personaplex.py --model-path "$CHECKPOINT_DIR" \
-    --audio "caller-$seconds.wav" --voice NATF2 --greedy \
-    --lm.engine.context_length 16384 \
-    --out "reply-$seconds.wav" --out-text "reply-$seconds.txt"
-done
-python - <<'PYTHON'
-import soundfile as sf
-for seconds in (300, 704):
-    reply = sf.info(f"reply-{seconds}.wav")
-    assert reply.samplerate == 24000
-    assert reply.frames == seconds * reply.samplerate
-PYTHON
-```
-
-Record the Omni commit, checkpoint revision, runtime/GPU, full command, input hashes and output artifacts when publishing new measurements. Do not carry forward older numerical results after a window or alignment change without rerunning them.
+Reference comparisons and reproducibility checks are evaluation scripts under
+`benchmarks/eval/`, separate from the unit suite. See the
+[PersonaPlex evaluation guide](../../benchmarks/eval/personaplex.md) for checkpoint,
+reference-environment and output setup. The greedy comparison checks a matching
+prefix, not full-output equality; the component comparison includes a diagnostic
+for the reference depformer ring behavior.

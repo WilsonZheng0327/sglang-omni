@@ -2,10 +2,10 @@
 """Save Moshi-base component outputs from the reference package.
 
 Runs under the reference's own interpreter (its torch pin differs from ours)
-and writes one safetensors file that test_personaplex_components.py compares
+and writes one safetensors file that personaplex_components.py compares
 the port's Mimi codec, input embeddings and depformer against.
 
-    python tests/test_model/personaplex_reference_dump.py \\
+    python benchmarks/eval/personaplex_reference_dump.py \\
         --checkpoint ~/.cache/huggingface/hub/models--kyutai--moshiko-pytorch-bf16/snapshots/<rev> \\
         --clip ~/personaplex/assets/test/input_assistant.wav \\
         --out ~/.cache/personaplex-parity/moshi_base_reference.safetensors
@@ -71,9 +71,13 @@ def load_clip(path: str, frames: int, sample_rate: int) -> torch.Tensor:
     pcm, rate = sphn.read(path)
     if rate != sample_rate:
         pcm = sphn.resample(pcm, src_sample_rate=rate, dst_sample_rate=sample_rate)
+    else:
+        pass
     samples = frames * SAMPLES_PER_FRAME
     if pcm.shape[-1] < samples:
         raise ValueError(f"{path} has {pcm.shape[-1]} samples, need {samples}")
+    else:
+        pass
     return torch.from_numpy(np.ascontiguousarray(pcm[:1, :samples], dtype=np.float32))
 
 

@@ -156,7 +156,6 @@ tests/
     │   ├── test_code2wav_stream.py
     │   ├── test_depformer.py
     │   ├── test_engine_builder.py
-    │   ├── test_hf_config.py
     │   ├── test_mimi_streaming.py
     │   ├── test_model_runner.py
     │   ├── test_prompts.py
