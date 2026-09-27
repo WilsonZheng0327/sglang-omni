@@ -142,6 +142,7 @@ Supported Models
    :caption: Benchmarks
 
    benchmarks/relay.md
+   benchmarks/qwen3_tts_leading_silence.md
 
 
 .. toctree::
