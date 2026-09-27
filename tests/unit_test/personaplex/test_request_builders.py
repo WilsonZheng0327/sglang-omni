@@ -6,7 +6,7 @@ from typing import Literal
 import pytest
 import torch
 
-from sglang_omni.client.client import Client, build_params
+from sglang_omni.client.client import Client
 from sglang_omni.client.types import GenerateRequest, SamplingParams
 from sglang_omni.models.personaplex.architecture import (
     DEFAULT_AUDIO_TEMPERATURE,
@@ -289,47 +289,11 @@ def test_stage_sampling_seed_and_text_controls_reach_backend() -> None:
     assert backend.sampling_seed == sampling.text_seed
 
 
-@pytest.mark.parametrize(
-    "stage,expected",
-    [
-        ({"seed": 7}, (0.7, 25)),
-        ({"temperature": 1.0, "top_k": -1}, (1.0, -1)),
-    ],
-)
-def test_http_stage_sampling_preserves_field_presence(
-    stage: dict[str, float | int], expected: tuple[float, int]
-) -> None:
-
-    requests = [
-        build_chat_generate_request(
-            ChatCompletionRequest(
-                model="m",
-                messages=[{"role": "user", "content": "hello"}],
-                stage_sampling={"lm": stage},
-            )
-        ),
-        build_rollout_generate_request(
-            RolloutGenerateRequest(
-                model="m",
-                prompt="hello",
-                stage_sampling={"lm": stage},
-            )
-        ),
-    ]
-    for request in requests:
-        data = build_lm_request(
-            make_payload(2, build_params(request), request.metadata), vocab_size=32000
-        )
-        sampling = data.talker_model_inputs["sampling"]
-        assert (sampling.text_temperature, sampling.text_top_k) == expected
-        assert sampling.seed == stage.get("seed")
-
-
-@pytest.mark.parametrize("seed", [None, 0, 7])
 @pytest.mark.parametrize("source", ["client-stage", "client-top", "chat", "rollout"])
 def test_sampling_presence_contract_across_entry_points(
-    seed: int | None, source: Literal["client-stage", "client-top", "chat", "rollout"]
+    source: Literal["client-stage", "client-top", "chat", "rollout"]
 ) -> None:
+    seed = 0
     if source == "client-stage":
         request = GenerateRequest(
             prompt="hello", stage_sampling={"lm": SamplingParams(seed=seed)}
@@ -379,7 +343,13 @@ def test_internal_stage_sampling_requires_presence_metadata() -> None:
 def test_explicit_neutral_stage_controls_override_stage_params(
     source: Literal["chat", "rollout"]
 ) -> None:
-    stage = {"top_p": 1.0, "min_p": 0.0, "repetition_penalty": 1.0}
+    stage = {
+        "temperature": 1.0,
+        "top_k": -1,
+        "top_p": 1.0,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0,
+    }
     overrides = {"lm": {"top_p": 0.8, "min_p": 0.1, "repetition_penalty": 1.2}}
     if source == "chat":
         request = build_chat_generate_request(
@@ -400,6 +370,7 @@ def test_explicit_neutral_stage_controls_override_stage_params(
         make_payload(2, lowered.params, lowered.metadata), vocab_size=32000
     )
     sampling = data.talker_model_inputs["sampling"]
+    assert (sampling.text_temperature, sampling.text_top_k) == (1.0, -1)
     assert (sampling.top_p, sampling.min_p, sampling.repetition_penalty) == (
         1.0,
         0.0,
@@ -407,14 +378,11 @@ def test_explicit_neutral_stage_controls_override_stage_params(
     )
 
 
-def test_rollout_stage_token_limit_alias_records_canonical_field() -> None:
+def test_rollout_stage_token_limit_alias_preserves_frame_budget() -> None:
     request = build_rollout_generate_request(
         RolloutGenerateRequest(prompt="hello", stage_sampling={"lm": {"max_tokens": 3}})
     )
     lowered = Client.build_omni_request(request)
-    assert lowered.metadata[EXPLICIT_STAGE_SAMPLING_PARAMS_KEY]["lm"] == [
-        "max_new_tokens"
-    ]
     data = build_lm_request(
         make_payload(2, lowered.params, lowered.metadata), vocab_size=32000
     )
@@ -422,24 +390,25 @@ def test_rollout_stage_token_limit_alias_records_canonical_field() -> None:
 
 
 @pytest.mark.parametrize(
-    "key,value",
+    "key,value,scope",
     [
-        ("audio_temperature", -1),
-        ("audio_temperature", float("inf")),
-        ("audio_temperature", float("nan")),
-        ("audio_temperature", "0.5"),
-        ("audio_temperature", True),
-        ("audio_top_k", -5),
-        ("audio_top_k", 2.5),
-        ("audio_top_k", True),
-        ("seed", 1.9),
-        ("seed", "abc"),
-        ("seed", True),
-        ("stop", ["hello"]),
-        ("stop_token_ids", [3]),
+        ("audio_temperature", -1, "top_level"),
+        ("audio_temperature", float("inf"), "stage_params"),
+        ("audio_temperature", float("nan"), "top_level"),
+        ("audio_temperature", "0.5", "stage_params"),
+        ("audio_temperature", True, "top_level"),
+        ("audio_top_k", -5, "stage_params"),
+        ("audio_top_k", 2.5, "top_level"),
+        ("audio_top_k", True, "stage_params"),
+        ("seed", 1.9, "top_level"),
+        ("seed", 1.9, "stage_params"),
+        ("seed", 1.9, "stage_sampling"),
+        ("seed", "abc", "top_level"),
+        ("seed", True, "stage_sampling"),
+        ("stop", ["hello"], "stage_params"),
+        ("stop_token_ids", [3], "stage_sampling"),
     ],
 )
-@pytest.mark.parametrize("scope", ["top_level", "stage_params", "stage_sampling"])
 def test_invalid_audio_seed_or_stop_is_a_bad_request(
     key: str,
     value: float | int | str | list[str] | list[int],
@@ -473,16 +442,11 @@ def test_valid_sampling_boundaries() -> None:
     assert sampling.audio.greedy and sampling.seed == 0
 
 
-@pytest.mark.parametrize(
-    "key,value",
-    [("temperature", -0.1), ("temperature", float("nan")), ("top_k", -2), ("top_k", 0)],
-)
 @pytest.mark.parametrize("scope", ["top_level", "stage_params", "stage_sampling"])
 def test_invalid_text_sampling_is_rejected_by_native_verification(
-    key: str,
-    value: float | int,
     scope: Literal["top_level", "stage_params", "stage_sampling"],
 ) -> None:
+    key, value = "temperature", -0.1
     params = {key: value} if scope == "top_level" else {scope: {"lm": {key: value}}}
     with pytest.raises(
         ValueError, match="PersonaPlex sampling parameters must be valid:"

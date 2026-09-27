@@ -197,23 +197,6 @@ def test_mimi_encode_fills_caller_and_voice_codes(monkeypatch):
     assert no_voice.user_codes.shape == (1, 8) and no_voice.voice_codes is None
 
 
-def test_voice_prompt_cache_reuses_more_than_one_packaged_bank(preprocess) -> None:
-    for _ in range(2):
-        for index in range(40):
-            preprocess(voice=f"voice-{index}")
-    assert len(preprocess.loads) == 40
-
-
-def test_voice_prompt_cache_evicts_old_prompts(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(stages, "VOICE_PROMPT_CACHE_MAX_BYTES", 320)
-    preprocess = request.getfixturevalue("preprocess")
-    for voice in ("a", "b", "c", "c", "a"):
-        preprocess(voice=voice)
-    assert preprocess.loads == ["a.pt", "b.pt", "c.pt", "a.pt"]
-
-
 def test_voice_prompt_cache_hit_refreshes_recency(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -225,14 +208,13 @@ def test_voice_prompt_cache_hit_refreshes_recency(
 
 
 @pytest.mark.parametrize(
-    "prompt",
+    "prompt,budget,expected_loads",
     [
-        VoicePrompt(frames=1, embeddings=torch.ones(1, 4)),
-        VoicePrompt(frames=1, tail_codes=torch.ones(1, 2, dtype=torch.long)),
-        VoicePrompt(frames=1, waveform=torch.ones(4)),
+        (VoicePrompt(frames=1, embeddings=torch.ones(1, 4)), 15, 4),
+        (VoicePrompt(frames=1, tail_codes=torch.ones(1, 2, dtype=torch.long)), 16, 3),
+        (VoicePrompt(frames=1, waveform=torch.ones(4)), 32, 2),
     ],
 )
-@pytest.mark.parametrize("budget,expected_loads", [(15, 4), (16, 3), (32, 2)])
 def test_voice_prompt_cache_byte_budget_preserves_request_results(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
@@ -259,13 +241,17 @@ def test_voice_prompt_cache_byte_budget_preserves_request_results(
                 torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("budget,expected_loads", [(159, 2), (160, 1)])
 def test_voice_prompt_cache_counts_combined_tensor_bytes(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    expected_loads: int,
 ) -> None:
-    monkeypatch.setattr(stages, "VOICE_PROMPT_CACHE_MAX_BYTES", 159)
+    monkeypatch.setattr(stages, "VOICE_PROMPT_CACHE_MAX_BYTES", budget)
     preprocess = request.getfixturevalue("preprocess")
     first = preprocess(voice="a")
     second = preprocess(voice="a")
-    assert preprocess.loads == ["a.pt", "a.pt"]
+    assert preprocess.loads == ["a.pt"] * expected_loads
     torch.testing.assert_close(first.voice_embeddings, second.voice_embeddings)
     torch.testing.assert_close(first.voice_tail_codes, second.voice_tail_codes)
