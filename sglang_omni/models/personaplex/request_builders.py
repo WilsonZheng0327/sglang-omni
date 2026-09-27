@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -116,16 +117,40 @@ def resolve_sampling(
     params: dict, explicit_fields=(), *, stage_sampling: dict
 ) -> RequestSampling:
     """Resolve selected stage values before stage overrides and top-level values."""
+    for source in (params, stage_param_overrides(params, LM_STAGE), stage_sampling):
+        temperature = source.get("audio_temperature")
+        if temperature is not None and (
+            isinstance(temperature, bool)
+            or not isinstance(temperature, (int, float))
+            or not math.isfinite(temperature)
+            or temperature < 0
+        ):
+            raise ValueError(
+                "PersonaPlex audio_temperature must be a non-negative finite number"
+            )
+        else:
+            pass
+        for key in ("audio_top_k", "seed"):
+            value = source.get(key)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int)
+            ):
+                raise ValueError(f"PersonaPlex {key} must be an integer")
+            elif key == "audio_top_k" and value is not None and value < -1:
+                raise ValueError("PersonaPlex audio_top_k must be at least -1")
+            else:
+                pass
+        for key in ("stop", "stop_token_ids"):
+            if source.get(key):
+                raise ValueError(f"PersonaPlex {key} must be empty")
+            else:
+                pass
     lm_overrides = stage_param_overrides(params, LM_STAGE)
     lm_params = {**params, **lm_overrides}
     explicit = set(explicit_fields)
     seed = stage_sampling.get("seed")
     if seed is None:
         seed = lm_params.get("seed")
-    else:
-        pass
-    if isinstance(seed, bool):
-        raise ValueError("PersonaPlex seed must be an integer")
     else:
         pass
 
@@ -223,6 +248,12 @@ def build_lm_request(
         ignore_eos=True,
     )
     sampling_params.normalize(tokenizer=None)
+    try:
+        sampling_params.verify(vocab_size)
+    except ValueError as exc:
+        raise ValueError(
+            f"PersonaPlex sampling parameters must be valid: {exc}"
+        ) from exc
     if sampling.text_seed is not None:
         sampling_params.sampling_seed = sampling.text_seed
     else:
