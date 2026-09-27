@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Runs one PersonaPlex request through the timeline, one row per forward.
 
-Prefill embeds every prompt row at once. Each decode step then fuses the row
-for the next position from the last sampled text token, the agent codes the
-depformer produced for that position, and the caller's codes for it. The
-text token is sampled *before* the post hook so the depformer can consume it
-in the same step; the codes it spells out become the next row's input and,
-one position later, a finished output frame streamed to the codec.
+Prefill embeds every row the request's KV lacks at once: the whole prompt for
+a new request, the prompt and its generated positions for a retracted one.
+Each decode step then fuses the row for the next position from the last
+sampled text token, the agent codes the depformer produced for that position,
+and the caller's codes for it. The text token is sampled *before* the post
+hook so the depformer can consume it in the same step; the codes it spells
+out become the next row's input and, one position later, a finished output
+frame streamed to the codec.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from itertools import groupby
 from typing import Protocol
 
 import torch
-from sglang.srt.managers.schedule_batch import ScheduleBatch
+from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
@@ -93,6 +95,15 @@ class PersonaPlexModelRunner(ModelRunner):
         else:
             pass
         return cached
+
+    def agent_row_at(self, data: SGLangARRequestData, position: int) -> torch.Tensor:
+        timeline = self.request_timeline(data)
+        if position < timeline.num_prompt_positions:
+            return timeline.agent_row_before_start.to(self.model_device)
+        else:
+            return data.talker_model_inputs["agent_rows"][
+                position - timeline.num_prompt_positions
+            ]
 
     def prefill_rows(self, data: SGLangARRequestData) -> torch.Tensor:
         timeline = self.request_timeline(data)
@@ -194,23 +205,45 @@ class PersonaPlexModelRunner(ModelRunner):
             device=self.model_device,
         )
 
-    def generated_rows(
-        self, data: SGLangARRequestData, generated: list[int]
-    ) -> torch.Tensor:
-        """Embed the positions already generated, replayed after a retract."""
+    def missing_rows(self, data: SGLangARRequestData, req: Req) -> torch.Tensor:
+        """Embed the positions req's KV lacks, from its cached prefix to its last token.
+
+        A prompt position is the prompt's own row. A later one is the text token
+        req holds there, the agent codes the depformer spelled there, and the
+        caller's codes.
+        """
         model = self.model
         timeline = self.request_timeline(data)
-        device_rows = self.rows_on_device(data)
-        agent_rows = data.talker_model_inputs["agent_rows"]
-        start = timeline.num_prompt_positions
-        rows = torch.empty(
-            len(generated), NUM_STREAMS, dtype=torch.long, device=self.model_device
-        )
-        for index, token in enumerate(generated):
-            rows[index, 0] = int(token)
-            rows[index, AGENT_STREAM_OFFSET:USER_STREAM_OFFSET] = agent_rows[index]
-            rows[index, USER_STREAM_OFFSET:] = device_rows["user_rows"][start + index]
-        return model.embed_rows(rows).to(model.fusion_buffer.dtype)
+        num_prompt = timeline.num_prompt_positions
+        num_origin = len(req.origin_input_ids)
+        start = len(req.prefix_indices)
+        end = num_origin + len(req.output_ids)
+        assert start < end, (start, end)
+        pieces = []
+        if start < num_prompt:
+            pieces.append(self.prefill_rows(data)[start:])
+        else:
+            pass
+        first = max(start, num_prompt)
+        if first < end:
+            tokens = [
+                *req.origin_input_ids[first:],
+                *req.output_ids[max(first - num_origin, 0) :],
+            ]
+            agent_rows = data.talker_model_inputs["agent_rows"]
+            user_rows = self.rows_on_device(data)["user_rows"]
+            rows = torch.empty(
+                end - first, NUM_STREAMS, dtype=torch.long, device=self.model_device
+            )
+            rows[:, 0] = torch.tensor(tokens, dtype=torch.long)
+            rows[:, AGENT_STREAM_OFFSET:USER_STREAM_OFFSET] = torch.stack(
+                agent_rows[first - num_prompt : end - num_prompt]
+            )
+            rows[:, USER_STREAM_OFFSET:] = user_rows[first:end]
+            pieces.append(model.embed_rows(rows).to(model.fusion_buffer.dtype))
+        else:
+            pass
+        return torch.cat(pieces, dim=0)
 
     def before_prefill(
         self,
@@ -222,25 +255,18 @@ class PersonaPlexModelRunner(ModelRunner):
         for request, req in zip(requests, schedule_batch.reqs, strict=True):
             data = request.data
             inputs = data.talker_model_inputs
-            generated = [int(token) for token in req.output_ids]
-            prompt_rows = self.prefill_rows(data)
-            if not generated:
-                inputs["prefill_forced"] = self.request_timeline(
-                    data
-                ).forced_agent_at_start.to(self.model_device)
-                rows.append(prompt_rows)
-                continue
-            else:
-                pass
-            # Note (wilsonzheng0327): Resuming a retracted request replays the prompt
-            # and every generated position, so those rows are embedded again too.
-            self.rows_on_device(data)["agent_row"] = inputs["agent_rows"][
-                len(generated) - 1
-            ]
-            inputs["prefill_forced"] = self.free_codes()
-            rows.append(
-                torch.cat([prompt_rows, self.generated_rows(data, generated)], dim=0)
+            timeline = self.request_timeline(data)
+            rows.append(self.missing_rows(data, req))
+            predicted = len(req.origin_input_ids) + len(req.output_ids)
+            self.rows_on_device(data)["agent_row"] = self.agent_row_at(
+                data, predicted - 1
             )
+            if predicted == timeline.num_prompt_positions:
+                inputs["prefill_forced"] = timeline.forced_agent_at_start.to(
+                    self.model_device
+                )
+            else:
+                inputs["prefill_forced"] = self.free_codes()
         attach_omni_prefill_inputs(
             forward_batch,
             OmniPrefillInputs(
@@ -275,9 +301,8 @@ class PersonaPlexModelRunner(ModelRunner):
         rows = []
         for request, req in zip(requests, schedule_batch.reqs, strict=True):
             data = request.data
-            timeline = self.request_timeline(data)
             device_rows = self.rows_on_device(data)
-            position = timeline.input_position(len(req.output_ids))
+            position = len(req.origin_input_ids) + len(req.output_ids) - 1
             row = torch.empty(NUM_STREAMS, dtype=torch.long, device=self.model_device)
             row[0] = int(req.output_ids[-1])
             row[AGENT_STREAM_OFFSET:USER_STREAM_OFFSET] = device_rows["agent_row"]
