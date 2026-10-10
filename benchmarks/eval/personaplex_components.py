@@ -119,7 +119,7 @@ def compare_mimi_encode(codec: MimiCodec, reference: dict[str, torch.Tensor]) ->
 def compare_mimi_decode(codec: MimiCodec, reference: dict[str, torch.Tensor]) -> None:
     codes = reference["codes"]
     whole = codec.decode(codes)
-    state = codec.init_decode_state()
+    state = codec.init_decode_state(batch_size=codes.shape[0])
     chunked = torch.cat(
         [
             codec.decode_step(codes[:, :, f : f + 1], state)
