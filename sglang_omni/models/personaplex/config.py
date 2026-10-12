@@ -123,6 +123,11 @@ class PersonaPlexPipelineConfig(PipelineConfig):
 
 
 class PersonaPlexRealtimePipelineConfig(PersonaPlexPipelineConfig):
+    realtime_deployment_factory: ClassVar[str | None] = (
+        "sglang_omni.models.personaplex.realtime.create_realtime_deployment"
+    )
+    is_realtime_only: ClassVar[bool] = True
+
     max_sessions: int = Field(default=1, ge=1)
     stages: list[StageConfig] = Field(
         default_factory=personaplex_realtime_stages_factory
@@ -133,3 +138,8 @@ class PersonaPlexRealtimePipelineConfig(PersonaPlexPipelineConfig):
 
 
 EntryClass = PersonaPlexPipelineConfig
+
+Variants = {
+    "offline": PersonaPlexPipelineConfig,
+    "realtime": PersonaPlexRealtimePipelineConfig,
+}
