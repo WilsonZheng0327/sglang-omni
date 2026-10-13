@@ -49,6 +49,7 @@ translation target is English in both APIs.
 | [Qwen3-ASR](../cookbook/qwen3_asr.md) | HTTP 400 |
 | [Fun-ASR](../cookbook/fun_asr.md) | HTTP 400 |
 | [ARK-ASR](../cookbook/arkasr.md) | HTTP 400 |
+| [Nemotron 3.5 ASR](../cookbook/nemotron3_5_asr.md) | HTTP 400 |
 | [MOSS-Transcribe-Diarize](../cookbook/moss_transcribe_diarize.md) | HTTP 400 |
 
 See each model's cookbook for its transcription workflow.
@@ -60,10 +61,11 @@ See each model's cookbook for its transcription workflow.
 | `json` | JSON object containing `text` |
 | `verbose_json` | JSON with `task="translate"`, text, duration, and segments |
 | `text` | Raw translated text with `text/plain` content type |
-| `srt`, `vtt` | Not supported; HTTP 400 |
+| `srt`, `vtt` | Whisper subtitles with model-derived segment timestamps |
 
 `verbose_json` returns a single segment spanning the audio duration, matching
-`/v1/audio/transcriptions`.
+`/v1/audio/transcriptions`. Subtitle formats require a model adapter with real
+segment timestamps; unsupported models return HTTP 400 before inference.
 
 Streaming is available with `stream=true` for `json` and `text`, using the same
 SSE lifecycle as transcriptions: `transcript.text.delta` events, one

@@ -63,12 +63,14 @@ sequenceDiagram
 | Local CPU relay movement | SHM relay      | Full payload tensor buffers and stream chunks that are not CUDA-local                                        |
 | Cross-node movement      | Mooncake relay | Full payload tensor buffers and stream chunks over Mooncake-selected transport                               |
 
-`DataReadyMessage.data_ref` carries either a direct PyTorch CUDA IPC envelope or
-a typed relay `DataRef`. A direct envelope contains a pickled payload header or
-stream metadata together with PyTorch CUDA storage handles. A relay `DataRef`
-contains the object id, data kind, transport, layout, backend buffer reference,
-tensor layout, and optional stream metadata. Backend-owned details from
-`RelayOperation.metadata` live under `DataRef.buffer.info`.
+`DataReadyMessage.data_ref` carries a direct PyTorch CUDA IPC envelope, an inline
+CPU stream envelope, or a typed relay `DataRef`. A direct envelope contains a
+pickled payload header or stream metadata together with PyTorch CUDA storage
+handles. An inline CPU stream envelope contains a serialized tensor and its
+tensor-free metadata. A relay `DataRef` contains the object id, data kind,
+transport, layout, backend buffer reference, tensor layout, and optional stream
+metadata. Backend-owned details from `RelayOperation.metadata` live under
+`DataRef.buffer.info`.
 
 ## Normal Payload Flow
 
@@ -149,12 +151,19 @@ For same-node GPU targets:
 
 For same-process stream targets:
 
-- the stage sends the chunk through `LocalStageDispatcher.send_stream_chunk()`
+- the stage sends consecutive chunks for one target through one
+  `LocalStageDispatcher.send_stream_chunks()` call, in order
+- the receiver checks each chunk as before and enqueues one `stream_chunk`
+  message per chunk
 - the receiver gets the original Python object and metadata by reference
 - the same read-only and lifetime caveats as payload LOCAL_OBJECT apply
 
 For nonlocal stream targets:
 
+- a CPU tensor whose serialized tensor-and-metadata payload is at most 16 KiB
+  and whose metadata contains no tensors may ride directly in `DataReadyMessage`
+- inline envelopes own their bytes and therefore require no relay ACK; chunks
+  that exceed the limit continue through the selected relay
 - the chunk is written with `write_tensor()`
 - tensor-valued metadata is extracted and written as separate `DataRef`s
 - the control message is sent before waiting for pending put operations

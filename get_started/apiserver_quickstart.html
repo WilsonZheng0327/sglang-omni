@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=0deb7d70"></script>
+    <script src="../_static/documentation_options.js?v=7ed07c24"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -51,15 +51,15 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/apiserver_quickstart';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/qwen3_omni_server_generator.js?v=66f6ff63"></script>
-    <script src="../_static/js/ming_omni_server_generator.js?v=694b1473"></script>
+    <script src="../_static/js/qwen3_omni_server_generator.js?v=d7738e8a"></script>
+    <script src="../_static/js/ming_omni_server_generator.js?v=7979a72f"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.2" />
-    <meta name="docbuild:last-update" content="Aug 17, 2026"/>
+  <meta name="docsearch:version" content="0.1.8" />
+    <meta name="docbuild:last-update" content="Oct 13, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -207,8 +207,10 @@
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="installation.html">🚀 Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation_npu.html">🚀 Installation — Ascend NPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installation_xpu.html">🚀 Installation — Intel XPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="release_notes.html">Release Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation_cpu.html">🚀 Installation — Intel CPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation_musa.html">🚀 Installation — MUSA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="nav bd-sidenav">
@@ -225,24 +227,33 @@
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/qwen3_asr.html">Qwen3-ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/fun_asr.html">Fun-ASR-Nano</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/arkasr.html">ARK-ASR-3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/nemotron3_5_asr.html">Nemotron 3.5 ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/moss_transcribe_diarize.html">MOSS-Transcribe-Diarize</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/whisper_asr.html">Whisper ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/qwen3_omni.html">Qwen3-Omni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/minicpm_o.html">MiniCPM-o</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/ming_omni.html">Ming-Omni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/nemotron_voicechat.html">NemotronLabs VoiceChat</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/personaplex.html">PersonaPlex</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cookbook/llada2_uni.html">LLaDA2.0-Uni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/fun_cosyvoice3.html">Fun-CosyVoice3</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cookbook/auk.html">AuK</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">General Usage</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/qwen3_omni.html">Omni Model Usage</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/audio_translations.html">Audio Translations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/tts.html">TTS Model Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology.html">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/tts_process_topology.html">TTS Process Topology</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">Omni Router Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology_migration.html">Process Topology Migration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Rust Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Benchmarks</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../benchmarks/relay.html">Benchmark Relay</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../benchmarks/qwen3_tts_leading_silence.html">Qwen3-TTS Base: Leading Silence in X-Vector Voice Cloning</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Reference</span></p>
 <ul class="nav bd-sidenav">
@@ -250,11 +261,18 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/adding_parameters.html">Adding a Parameter</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/mlx.html">MLX Path</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/bump_version.html">Bumping the SGLang Pin</a></li>
 </ul>
 
     </div>
@@ -582,8 +600,8 @@ detection is not enabled yet; select the backend explicitly with
 </div>
 <p>Example response:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;healthy&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;running&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"healthy"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"running"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -605,15 +623,15 @@ detection is not enabled yet; select the backend explicitly with
 <h2>Send a Minimal Chat Request<a class="headerlink" href="#send-a-minimal-chat-request" title="Link to this heading">#</a></h2>
 <p>The core endpoint is <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/v1/chat/completions</span></code>.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8000/v1/chat/completions<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<span class="s1">    &quot;model&quot;: &quot;qwen3-omni&quot;,</span>
-<span class="s1">    &quot;messages&quot;: [</span>
-<span class="s1">      {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hello!&quot;}</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "model": "qwen3-omni",</span>
+<span class="s1">    "messages": [</span>
+<span class="s1">      {"role": "user", "content": "Hello!"}</span>
 <span class="s1">    ],</span>
-<span class="s1">    &quot;max_tokens&quot;: 128,</span>
-<span class="s1">    &quot;stream&quot;: false</span>
-<span class="s1">  }&#39;</span>
+<span class="s1">    "max_tokens": 128,</span>
+<span class="s1">    "stream": false</span>
+<span class="s1">  }'</span>
 </pre></div>
 </div>
 <p>The response follows the OpenAI chat completion shape. In the common case, the text is in <code class="docutils literal notranslate"><span class="pre">choices[0].message.content</span></code>.</p>
@@ -633,14 +651,14 @@ detection is not enabled yet; select the backend explicitly with
 <h3>Streaming<a class="headerlink" href="#streaming" title="Link to this heading">#</a></h3>
 <p>Set <code class="docutils literal notranslate"><span class="pre">stream</span></code> to <code class="docutils literal notranslate"><span class="pre">true</span></code> to receive Server-Sent Events (SSE):</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-N<span class="w"> </span>http://localhost:8000/v1/chat/completions<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<span class="s1">    &quot;model&quot;: &quot;qwen3-omni&quot;,</span>
-<span class="s1">    &quot;messages&quot;: [</span>
-<span class="s1">      {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Write a short greeting.&quot;}</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "model": "qwen3-omni",</span>
+<span class="s1">    "messages": [</span>
+<span class="s1">      {"role": "user", "content": "Write a short greeting."}</span>
 <span class="s1">    ],</span>
-<span class="s1">    &quot;stream&quot;: true</span>
-<span class="s1">  }&#39;</span>
+<span class="s1">    "stream": true</span>
+<span class="s1">  }'</span>
 </pre></div>
 </div>
 <p>A few details matter here:</p>
@@ -665,17 +683,17 @@ detection is not enabled yet; select the backend explicitly with
 </ul>
 <p>For example, a video request with text output looks like this:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8000/v1/chat/completions<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<span class="s1">    &quot;model&quot;: &quot;qwen3-omni&quot;,</span>
-<span class="s1">    &quot;messages&quot;: [</span>
-<span class="s1">      {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;What is happening in this video?&quot;}</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "model": "qwen3-omni",</span>
+<span class="s1">    "messages": [</span>
+<span class="s1">      {"role": "user", "content": "What is happening in this video?"}</span>
 <span class="s1">    ],</span>
-<span class="s1">    &quot;videos&quot;: [&quot;/absolute/path/to/demo.mp4&quot;],</span>
-<span class="s1">    &quot;modalities&quot;: [&quot;text&quot;],</span>
-<span class="s1">    &quot;max_tokens&quot;: 128,</span>
-<span class="s1">    &quot;stream&quot;: false</span>
-<span class="s1">  }&#39;</span>
+<span class="s1">    "videos": ["/absolute/path/to/demo.mp4"],</span>
+<span class="s1">    "modalities": ["text"],</span>
+<span class="s1">    "max_tokens": 128,</span>
+<span class="s1">    "stream": false</span>
+<span class="s1">  }'</span>
 </pre></div>
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">videos</span></code>, <code class="docutils literal notranslate"><span class="pre">images</span></code>, and <code class="docutils literal notranslate"><span class="pre">audios</span></code> fields accept either local file paths or HTTP(S) URLs.</p>
@@ -685,13 +703,13 @@ detection is not enabled yet; select the backend explicitly with
 <h2>Text-to-Speech<a class="headerlink" href="#text-to-speech" title="Link to this heading">#</a></h2>
 <p>The server also exposes <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/v1/audio/speech</span></code>.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8000/v1/audio/speech<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<span class="s1">    &quot;model&quot;: &quot;qwen3-omni&quot;,</span>
-<span class="s1">    &quot;input&quot;: &quot;Hello from SGLang-Omni.&quot;,</span>
-<span class="s1">    &quot;voice&quot;: &quot;default&quot;,</span>
-<span class="s1">    &quot;response_format&quot;: &quot;wav&quot;</span>
-<span class="s1">  }&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "model": "qwen3-omni",</span>
+<span class="s1">    "input": "Hello from SGLang-Omni.",</span>
+<span class="s1">    "voice": "default",</span>
+<span class="s1">    "response_format": "wav"</span>
+<span class="s1">  }'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span>speech.wav
 </pre></div>
 </div>
@@ -706,8 +724,9 @@ detection is not enabled yet; select the backend explicitly with
 <p>When requests fail, the server returns standard HTTP error codes:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">400</span> <span class="pre">Bad</span> <span class="pre">Request</span></code>: malformed request body or invalid parameters</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">422</span> <span class="pre">Unprocessable</span> <span class="pre">Entity</span></code>: a request field fails schema validation, such as empty <code class="docutils literal notranslate"><span class="pre">messages</span></code> without top-level <code class="docutils literal notranslate"><span class="pre">audios</span></code>, <code class="docutils literal notranslate"><span class="pre">images</span></code> or <code class="docutils literal notranslate"><span class="pre">videos</span></code>, or <code class="docutils literal notranslate"><span class="pre">max_tokens</span></code> below 1 (the response names the field)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">500</span> <span class="pre">Internal</span> <span class="pre">Server</span> <span class="pre">Error</span></code>: runtime error during generation (check server logs for details)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">503</span> <span class="pre">Service</span> <span class="pre">Unavailable</span></code>: the runtime is not healthy (verify with <code class="docutils literal notranslate"><span class="pre">/health</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">503</span> <span class="pre">Service</span> <span class="pre">Unavailable</span></code>: the request queue is full (retry later), or the runtime is not healthy (verify with <code class="docutils literal notranslate"><span class="pre">/health</span></code>)</p></li>
 </ul>
 <p>If you see a 500 error, check the server logs for the full traceback. Common issues include:</p>
 <ul class="simple">
@@ -806,7 +825,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 17, 2026.
+  Last updated on Oct 13, 2026.
   <br/>
 </p>
   </div>

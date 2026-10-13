@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=0deb7d70"></script>
+    <script src="../_static/documentation_options.js?v=7ed07c24"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -51,17 +51,17 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'cookbook/arkasr';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/qwen3_omni_server_generator.js?v=66f6ff63"></script>
-    <script src="../_static/js/ming_omni_server_generator.js?v=694b1473"></script>
+    <script src="../_static/js/qwen3_omni_server_generator.js?v=d7738e8a"></script>
+    <script src="../_static/js/ming_omni_server_generator.js?v=7979a72f"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="MOSS-Transcribe-Diarize" href="moss_transcribe_diarize.html" />
+    <link rel="next" title="Nemotron 3.5 ASR" href="nemotron3_5_asr.html" />
     <link rel="prev" title="Fun-ASR-Nano" href="fun_asr.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.2" />
-    <meta name="docbuild:last-update" content="Aug 17, 2026"/>
+  <meta name="docsearch:version" content="0.1.8" />
+    <meta name="docbuild:last-update" content="Oct 13, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -207,8 +207,10 @@
         <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation.html">🚀 Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">🚀 Installation — Ascend NPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_xpu.html">🚀 Installation — Intel XPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/release_notes.html">Release Notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_cpu.html">🚀 Installation — Intel CPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/installation_musa.html">🚀 Installation — MUSA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
@@ -225,24 +227,33 @@
 <li class="toctree-l1"><a class="reference internal" href="qwen3_asr.html">Qwen3-ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fun_asr.html">Fun-ASR-Nano</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">ARK-ASR-3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron3_5_asr.html">Nemotron 3.5 ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_transcribe_diarize.html">MOSS-Transcribe-Diarize</a></li>
 <li class="toctree-l1"><a class="reference internal" href="whisper_asr.html">Whisper ASR</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qwen3_omni.html">Qwen3-Omni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="minicpm_o.html">MiniCPM-o</a></li>
 <li class="toctree-l1"><a class="reference internal" href="ming_omni.html">Ming-Omni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_voicechat.html">NemotronLabs VoiceChat</a></li>
+<li class="toctree-l1"><a class="reference internal" href="personaplex.html">PersonaPlex</a></li>
 <li class="toctree-l1"><a class="reference internal" href="llada2_uni.html">LLaDA2.0-Uni</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fun_cosyvoice3.html">Fun-CosyVoice3</a></li>
+<li class="toctree-l1"><a class="reference internal" href="auk.html">AuK</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">General Usage</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/qwen3_omni.html">Omni Model Usage</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/audio_translations.html">Audio Translations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/tts.html">TTS Model Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology.html">Process Topology, Replicas, and GPU Sharing</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/tts_process_topology.html">TTS Process Topology</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">Omni Router Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/process_topology_migration.html">Process Topology Migration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../basic_usage/omni_router.html">SGLang-Omni Rust Router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../basic_usage/mps_dp.html">Same-GPU Data Parallelism with CUDA MPS</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Benchmarks</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../benchmarks/relay.html">Benchmark Relay</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../benchmarks/qwen3_tts_leading_silence.html">Qwen3-TTS Base: Leading Silence in X-Vector Voice Cloning</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Reference</span></p>
 <ul class="nav bd-sidenav">
@@ -250,11 +261,18 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/apiserver_design.html">API Server Design</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/pipeline.html">Pipeline Overview</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/config.html">Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/adding_parameters.html">Adding a Parameter</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/communication.html">Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/mlx.html">MLX Path</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/bump_version.html">Bumping the SGLang Pin</a></li>
 </ul>
 
     </div>
@@ -489,19 +507,25 @@
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#server-configuration">Server Configuration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#server-configuration">Server Configuration</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prefill-coalescing">Prefill Coalescing</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#transcribe-audio">Transcribe Audio</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stream-transcription">Stream Transcription</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#request-parameters">Request Parameters</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#response-formats">Response Formats</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#audio-handling">Audio Handling</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dtype">dtype</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#apple-silicon">Apple Silicon</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#marker-token-suppression">Marker-Token Suppression</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pre-lm-audio-encoder">Pre-LM Audio Encoder</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-this-relates-to-encoder-max-batch-size">How this relates to <code class="docutils literal notranslate"><span class="pre">encoder_max_batch_size</span></code></a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoder-cuda-graph">Encoder CUDA Graph</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarking">Benchmarking</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known Limitations</a></li>
 </ul>
@@ -539,7 +563,7 @@ first launch will prompt to execute the checkpoint’s bundled code.</p>
 <p>ARK-ASR runs a single ASR stage on one GPU, in <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> by default.
 Async decode is enabled by default for decode batches of at least two requests,
 allowing the shared one-step-lookahead path to overlap host-side result
-processing with the next GPU decode forward. Use <code class="docutils literal notranslate"><span class="pre">--decode-mode</span> <span class="pre">sync</span></code> to disable
+processing with the next GPU decode forward. Use <code class="docutils literal notranslate"><span class="pre">--asr.factory.enable_async_decode</span> <span class="pre">false</span></code> to disable
 it, or tune the crossover with <code class="docutils literal notranslate"><span class="pre">--async-lookahead-min-batch-size</span></code>.
 Request concurrency and audio-encoder batching are controlled separately:</p>
 <ul class="simple">
@@ -573,10 +597,26 @@ capacity is acceptable.</p>
 <p>To force synchronous decode while comparing modes, use:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--decode-mode<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--asr.factory.enable_async_decode<span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span>
 </pre></div>
 </div>
+<section id="prefill-coalescing">
+<h3>Prefill Coalescing<a class="headerlink" href="#prefill-coalescing" title="Link to this heading">#</a></h3>
+<p>ARK-ASR holds newly built requests briefly by default so the scheduler can
+admit a larger prefill batch. The tuned defaults are 16 requests / 32 ms:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--prefill-coalesce-requests<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--prefill-coalesce-wait-ms<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span>
+</pre></div>
+</div>
+<p>Admission is released after either the request threshold or wait deadline is
+reached; it can release earlier when pending request-build work drains. Set
+<code class="docutils literal notranslate"><span class="pre">--prefill-coalesce-requests</span> <span class="pre">0</span></code> to disable coalescing. Tune these values for the
+target request distribution and latency requirements.</p>
+</section>
 </section>
 <section id="transcribe-audio">
 <h2>Transcribe Audio<a class="headerlink" href="#transcribe-audio" title="Link to this heading">#</a></h2>
@@ -589,22 +629,44 @@ capacity is acceptable.</p>
 </div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
 
-<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;tests/data/query_to_cars.wav&quot;</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">"tests/data/query_to_cars.wav"</span><span class="p">,</span> <span class="s2">"rb"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
     <span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
-        <span class="s2">&quot;http://localhost:8000/v1/audio/transcriptions&quot;</span><span class="p">,</span>
+        <span class="s2">"http://localhost:8000/v1/audio/transcriptions"</span><span class="p">,</span>
         <span class="n">data</span><span class="o">=</span><span class="p">{</span>
-            <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;AutoArk-AI/ARK-ASR-3B&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;language&quot;</span><span class="p">:</span> <span class="s2">&quot;en&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;response_format&quot;</span><span class="p">:</span> <span class="s2">&quot;json&quot;</span><span class="p">,</span>
+            <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"AutoArk-AI/ARK-ASR-3B"</span><span class="p">,</span>
+            <span class="s2">"language"</span><span class="p">:</span> <span class="s2">"en"</span><span class="p">,</span>
+            <span class="s2">"response_format"</span><span class="p">:</span> <span class="s2">"json"</span><span class="p">,</span>
         <span class="p">},</span>
-        <span class="n">files</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;file&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;query_to_cars.wav&quot;</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="s2">&quot;audio/wav&quot;</span><span class="p">)},</span>
+        <span class="n">files</span><span class="o">=</span><span class="p">{</span><span class="s2">"file"</span><span class="p">:</span> <span class="p">(</span><span class="s2">"query_to_cars.wav"</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="s2">"audio/wav"</span><span class="p">)},</span>
         <span class="n">timeout</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span>
     <span class="p">)</span>
 
 <span class="n">resp</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()[</span><span class="s2">&quot;text&quot;</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">json</span><span class="p">()[</span><span class="s2">"text"</span><span class="p">])</span>
 </pre></div>
 </div>
+</section>
+<section id="stream-transcription">
+<h2>Stream Transcription<a class="headerlink" href="#stream-transcription" title="Link to this heading">#</a></h2>
+<p>Set the multipart <code class="docutils literal notranslate"><span class="pre">stream</span></code> field to <code class="docutils literal notranslate"><span class="pre">true</span></code> and keep <code class="docutils literal notranslate"><span class="pre">response_format</span></code> as
+<code class="docutils literal notranslate"><span class="pre">json</span></code> or <code class="docutils literal notranslate"><span class="pre">text</span></code> to receive Server-Sent Events (SSE):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-N<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/v1/audio/transcriptions<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-F<span class="w"> </span><span class="nv">model</span><span class="o">=</span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-F<span class="w"> </span><span class="nv">file</span><span class="o">=</span>@tests/data/query_to_cars.wav<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-F<span class="w"> </span><span class="nv">language</span><span class="o">=</span>en<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-F<span class="w"> </span><span class="nv">response_format</span><span class="o">=</span>json<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-F<span class="w"> </span><span class="nv">stream</span><span class="o">=</span><span class="nb">true</span>
+</pre></div>
+</div>
+<p>The response contains zero or more <code class="docutils literal notranslate"><span class="pre">transcript.text.delta</span></code> events, followed
+by one <code class="docutils literal notranslate"><span class="pre">transcript.text.done</span></code> event with the complete post-processed
+transcript, then <code class="docutils literal notranslate"><span class="pre">data:</span> <span class="pre">[DONE]</span></code>. Streaming primarily reduces time to first
+text; it does not change the final transcript.</p>
+<p>Treat <code class="docutils literal notranslate"><span class="pre">transcript.text.done</span></code> as the authoritative transcript: it is the same
+post-processed string as the non-stream <code class="docutils literal notranslate"><span class="pre">text</span></code> field. Incremental
+<code class="docutils literal notranslate"><span class="pre">transcript.text.delta</span></code> events are a live preview. Concatenating them may
+differ from <code class="docutils literal notranslate"><span class="pre">done</span></code> by leading or trailing whitespace (the final adapter
+<code class="docutils literal notranslate"><span class="pre">.strip()</span></code>s the full decode). Persist <code class="docutils literal notranslate"><span class="pre">done.text</span></code>, not <code class="docutils literal notranslate"><span class="pre">&quot;&quot;.join(deltas)</span></code>.</p>
 </section>
 <section id="request-parameters">
 <h2>Request Parameters<a class="headerlink" href="#request-parameters" title="Link to this heading">#</a></h2>
@@ -637,7 +699,12 @@ capacity is acceptable.</p>
 <td><p><code class="docutils literal notranslate"><span class="pre">json</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">json</span></code>, <code class="docutils literal notranslate"><span class="pre">verbose_json</span></code>, or <code class="docutils literal notranslate"><span class="pre">text</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">temperature</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">stream</span></code></p></td>
+<td><p>boolean</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>Emit SSE text deltas. Streaming accepts only <code class="docutils literal notranslate"><span class="pre">json</span></code> or <code class="docutils literal notranslate"><span class="pre">text</span></code> response formats</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">temperature</span></code></p></td>
 <td><p>float</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code> (greedy)</p></td>
 <td><p>Sampling temperature. When unset or <code class="docutils literal notranslate"><span class="pre">0</span></code>, SGLang’s sampling normalization selects greedy decoding (<code class="docutils literal notranslate"><span class="pre">top_k=1</span></code>); no non-zero temperature is substituted.</p></td>
@@ -654,12 +721,12 @@ capacity is acceptable.</p>
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">verbose_json</span></code></strong> — the OpenAI verbose shape, built by the default transcription
 adapter (whole transcript as a single segment):</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;transcribe&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;language&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;en&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.34</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;segments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;end&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">12.34</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">}],</span>
-<span class="w">  </span><span class="nt">&quot;usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;duration&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">13</span><span class="p">}</span>
+<span class="w">  </span><span class="nt">"task"</span><span class="p">:</span><span class="w"> </span><span class="s2">"transcribe"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"language"</span><span class="p">:</span><span class="w"> </span><span class="s2">"en"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mf">12.34</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"segments"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"start"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="nt">"end"</span><span class="p">:</span><span class="w"> </span><span class="mf">12.34</span><span class="p">,</span><span class="w"> </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"usage"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"duration"</span><span class="p">,</span><span class="w"> </span><span class="nt">"seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">13</span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -691,6 +758,25 @@ audio-encoder reimplementation was checked for parity against the reference
 activations under fp16 (matching the reference <code class="docutils literal notranslate"><span class="pre">modeling_audio.py</span></code>) so large
 activations stay finite; this clamp is a no-op under <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code>.</p></li>
 </ul>
+</section>
+<section id="apple-silicon">
+<h2>Apple Silicon<a class="headerlink" href="#apple-silicon" title="Link to this heading">#</a></h2>
+<p>On macOS arm64, ARK-ASR-3B runs through the existing Torch/MPS compatibility
+path without a converted checkpoint or model-specific code changes. Leave
+<code class="docutils literal notranslate"><span class="pre">SGLANG_USE_MLX</span></code> unset:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">unset</span><span class="w"> </span>SGLANG_USE_MLX
+<span class="nb">export</span><span class="w"> </span><span class="nv">DYLD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>brew<span class="w"> </span>--prefix<span class="w"> </span>ffmpeg@7<span class="k">)</span><span class="s2">/lib</span><span class="si">${</span><span class="nv">DYLD_LIBRARY_PATH</span><span class="p">:+:</span><span class="nv">$DYLD_LIBRARY_PATH</span><span class="si">}</span><span class="s2">"</span>
+sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-name<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--asr.engine.max_running_requests<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span>
+</pre></div>
+</div>
+<p>This path was validated on a MacBook Air with an M4 and 16 GB of unified
+memory using the official checkpoint and <code class="docutils literal notranslate"><span class="pre">tests/data/query_to_cars.wav</span></code>. The
+server returned the expected transcript through <code class="docutils literal notranslate"><span class="pre">/v1/audio/transcriptions</span></code>.
+Set <code class="docutils literal notranslate"><span class="pre">SGLANG_USE_MLX=1</span></code> to select the native MLX path.</p>
 </section>
 <section id="marker-token-suppression">
 <h2>Marker-Token Suppression<a class="headerlink" href="#marker-token-suppression" title="Link to this heading">#</a></h2>
@@ -774,18 +860,54 @@ construction; encoder concurrency and backpressure are owned by the separate
 pre-LM queue.</p>
 </section>
 </section>
+<section id="encoder-cuda-graph">
+<h2>Encoder CUDA Graph<a class="headerlink" href="#encoder-cuda-graph" title="Link to this heading">#</a></h2>
+<p>The audio encoder CUDA Graph is enabled by default. At startup it captures
+batch buckets derived from <code class="docutils literal notranslate"><span class="pre">encoder_max_batch_size</span></code> (powers of two, plus the
+limit itself; the default of 8 yields <code class="docutils literal notranslate"><span class="pre">1/2/4/8</span></code>) and mel-frame buckets in
+64-frame steps up to about 10 s (1024 frames). Longer clips, any uncaptured
+bucket, and a failed capture or replay use the eager encoder; requests never
+trigger capture.</p>
+<p>The graphs are captured after SGLang’s generation CUDA graphs and before the
+pre-LM encoder service. To profile eager encoder execution:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--asr.factory.enable_encoder_cuda_graph<span class="w"> </span><span class="nb">false</span>
+</pre></div>
+</div>
+<p>Or in a pipeline config:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">stages</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">asr</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">factory</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">enable_encoder_cuda_graph</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</pre></div>
+</div>
+</section>
 <section id="benchmarking">
 <h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Link to this heading">#</a></h2>
 <p>Use <code class="docutils literal notranslate"><span class="pre">benchmarks/eval/benchmark_asr_seedtts.py</span></code> to sweep ASR concurrency on
 SeedTTS reference audio through <code class="docutils literal notranslate"><span class="pre">/v1/audio/transcriptions</span></code>. Pass
 <code class="docutils literal notranslate"><span class="pre">--model-path</span> <span class="pre">AutoArk-AI/ARK-ASR-3B</span></code>; the shared request and metric logic lives in
 <code class="docutils literal notranslate"><span class="pre">benchmarks.tasks.asr</span></code>.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Download the test set once:</span>
+python<span class="w"> </span>-m<span class="w"> </span>benchmarks.dataset.prepare<span class="w"> </span>--dataset<span class="w"> </span>seedtts
+
+<span class="c1"># Launch ARK-ASR:</span>
+sgl-omni<span class="w"> </span>serve<span class="w"> </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 
 <span class="c1"># Sweep the full SeedTTS EN set (1088 clips) at 1..64 concurrency, 3 repeats:</span>
 python<span class="w"> </span>-m<span class="w"> </span>benchmarks.eval.benchmark_asr_seedtts<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--concurrencies<span class="w"> </span><span class="m">1</span>,2,4,8,16,32,64<span class="w"> </span>--repeats<span class="w"> </span><span class="m">3</span><span class="w"> </span>--warmup
+
+<span class="c1"># Quick smoke on a 20-sample subset:</span>
+python<span class="w"> </span>-m<span class="w"> </span>benchmarks.eval.benchmark_asr_seedtts<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-samples<span class="w"> </span><span class="m">20</span><span class="w"> </span>--concurrencies<span class="w"> </span><span class="m">2</span><span class="w"> </span>--repeats<span class="w"> </span><span class="m">1</span>
+
+<span class="c1"># Measure text TTFT and inter-chunk latency through the SSE endpoint:</span>
+python<span class="w"> </span>-m<span class="w"> </span>benchmarks.eval.benchmark_asr_seedtts<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--model-path<span class="w"> </span>AutoArk-AI/ARK-ASR-3B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-samples<span class="w"> </span><span class="m">20</span><span class="w"> </span>--concurrencies<span class="w"> </span><span class="m">2</span><span class="w"> </span>--repeats<span class="w"> </span><span class="m">1</span><span class="w"> </span>--stream
 </pre></div>
 </div>
 <p>The script reports corpus WER, throughput, and latency per concurrency level.
@@ -824,11 +946,11 @@ ARK-ASR currently ignores it (the transcription instruction is fixed).</p></li>
       </div>
     </a>
     <a class="right-next"
-       href="moss_transcribe_diarize.html"
+       href="nemotron3_5_asr.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">MOSS-Transcribe-Diarize</p>
+        <p class="prev-next-title">Nemotron 3.5 ASR</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -851,19 +973,25 @@ ARK-ASR currently ignores it (the transcription instruction is fixed).</p></li>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#server-configuration">Server Configuration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#server-configuration">Server Configuration</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prefill-coalescing">Prefill Coalescing</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#transcribe-audio">Transcribe Audio</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stream-transcription">Stream Transcription</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#request-parameters">Request Parameters</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#response-formats">Response Formats</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#audio-handling">Audio Handling</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dtype">dtype</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#apple-silicon">Apple Silicon</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#marker-token-suppression">Marker-Token Suppression</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pre-lm-audio-encoder">Pre-LM Audio Encoder</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-this-relates-to-encoder-max-batch-size">How this relates to <code class="docutils literal notranslate"><span class="pre">encoder_max_batch_size</span></code></a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoder-cuda-graph">Encoder CUDA Graph</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarking">Benchmarking</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known Limitations</a></li>
 </ul>
@@ -899,7 +1027,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 17, 2026.
+  Last updated on Oct 13, 2026.
   <br/>
 </p>
   </div>
