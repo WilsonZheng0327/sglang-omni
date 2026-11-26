@@ -128,7 +128,9 @@ def test_rank_without_draft_initializes_only_native_graphs(
     native_graphs.assert_called_once()
 
 
-def worker_and_batch(seed: int | None) -> tuple[SeededDSparkWorker, SimpleNamespace]:
+def worker_and_batch(
+    seed: int | None, min_p: float = 0.0
+) -> tuple[SeededDSparkWorker, SimpleNamespace]:
     worker = object.__new__(SeededDSparkWorker)
     worker.supports_request_seed = True
     worker._proposer = object.__new__(
@@ -153,10 +155,12 @@ def worker_and_batch(seed: int | None) -> tuple[SeededDSparkWorker, SimpleNamesp
         seq_lens=torch.tensor([17, 29], dtype=torch.int32),
         reqs=[
             SimpleNamespace(
-                rid="seeded", sampling_params=SimpleNamespace(sampling_seed=seed)
+                rid="seeded",
+                sampling_params=SimpleNamespace(sampling_seed=seed, min_p=min_p),
             ),
             SimpleNamespace(
-                rid="unseeded", sampling_params=SimpleNamespace(sampling_seed=None)
+                rid="unseeded",
+                sampling_params=SimpleNamespace(sampling_seed=None, min_p=0.0),
             ),
         ],
     )
@@ -338,3 +342,22 @@ def test_switching_rounds_keeps_graph_sampling_parameters_current(
     assert (
         sampler.stage_sampling_params.call_args.kwargs["sampling_info"] is seeded_info
     )
+
+
+def test_an_unseeded_min_p_round_takes_the_seeded_verify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the seeded verify filters by min_p, so a sampled min_p batch takes it without a seed."""
+    worker, batch = worker_and_batch(None, min_p=0.1)
+    staged: list[list[int | None]] = []
+
+    def stage(
+        request_ids: list[str], request_seeds: list[int | None], positions: torch.Tensor
+    ) -> None:
+        staged.append(request_seeds)
+        raise RuntimeError("seeded round")
+
+    monkeypatch.setattr(seeded_dspark, "prepare_seeded_batch", stage)
+    with pytest.raises(RuntimeError, match="seeded round"):
+        worker.forward_batch_generation(batch)
+    assert staged == [[None, None]]
